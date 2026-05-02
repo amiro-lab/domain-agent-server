@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: domain-agent-server
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: alembic>=1.13
+Requires-Dist: anthropic>=0.40
+Requires-Dist: openai>=1.50
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: passlib[bcrypt]>=1.7
+Requires-Dist: pyjwt>=2.8
+Requires-Dist: apscheduler>=3.10

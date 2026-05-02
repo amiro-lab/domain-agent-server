@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>domain-agent 관리자</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4/dist/chart.umd.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0f1117; --bg2: #1a1d27; --bg3: #242838; --bg4: #2e3347;
+  --border: #2e3347; --text: #e2e8f0; --muted: #64748b;
+  --green: #4ade80; --blue: #60a5fa; --purple: #a78bfa;
+  --yellow: #fbbf24; --red: #f87171; --orange: #fb923c;
+}
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+
+/* ─── 로그인 ─── */
+#login-screen {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh;
+}
+.login-box {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 16px;
+  padding: 40px; width: 360px;
+}
+.login-box h1 { font-size: 22px; margin-bottom: 8px; }
+.login-box h1 span { color: var(--green); }
+.login-box p { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+.form-group input {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px;
+  outline: none; transition: border-color .2s;
+}
+.form-group input:focus { border-color: var(--blue); }
+.btn {
+  width: 100%; padding: 11px; border: none; border-radius: 8px;
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s;
+}
+.btn:hover { opacity: .85; }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-danger { background: var(--red); color: #fff; width: auto; padding: 6px 14px; font-size: 12px; }
+.btn-sm { width: auto; padding: 5px 12px; font-size: 12px; font-weight: 500; }
+.btn-green { background: var(--green); color: #000; }
+.btn-muted { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
+.error-msg { color: var(--red); font-size: 12px; margin-top: 8px; text-align: center; }
+
+/* ─── 레이아웃 ─── */
+#app { display: none; }
+header {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 0 28px; display: flex; align-items: center; justify-content: space-between; height: 56px;
+}
+header h1 { font-size: 17px; font-weight: 600; }
+header h1 span { color: var(--green); }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.admin-badge { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
+.logout-btn { color: var(--muted); font-size: 12px; cursor: pointer; background: none; border: none; }
+.logout-btn:hover { color: var(--red); }
+
+.layout { display: flex; min-height: calc(100vh - 56px); }
+
+/* ─── 사이드바 ─── */
+nav {
+  width: 200px; background: var(--bg2); border-right: 1px solid var(--border);
+  padding: 16px 0; flex-shrink: 0;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px; cursor: pointer; color: var(--muted);
+  font-size: 13px; border-left: 3px solid transparent;
+  transition: all .15s; user-select: none;
+}
+.nav-item:hover { color: var(--text); background: var(--bg3); }
+.nav-item.active { color: var(--text); border-left-color: var(--blue); background: var(--bg3); }
+.nav-icon { font-size: 16px; width: 20px; text-align: center; }
+.nav-section { font-size: 10px; color: var(--muted); padding: 12px 20px 4px; text-transform: uppercase; letter-spacing: .08em; }
+
+/* ─── 메인 콘텐츠 ─── */
+main { flex: 1; padding: 28px; overflow-y: auto; }
+.page { display: none; }
+.page.active { display: block; }
+.page-title { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
+
+/* ─── 카드 그리드 ─── */
+.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 28px; }
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.card-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+.card-value { font-size: 28px; font-weight: 700; }
+.card-value.green { color: var(--green); }
+.card-value.blue { color: var(--blue); }
+.card-value.purple { color: var(--purple); }
+.card-value.yellow { color: var(--yellow); }
+.card-value.orange { color: var(--orange); }
+
+/* ─── 패널 ─── */
+.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ─── 테이블 ─── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 11px; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--bg3); }
+
+/* ─── 뱃지 / 상태 ─── */
+.tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.tag.on { background: #4ade8022; color: var(--green); }
+.tag.off { background: #f8717122; color: var(--red); }
+.tag.blue { background: #60a5fa22; color: var(--blue); }
+.tag.purple { background: #a78bfa22; color: var(--purple); }
+
+/* ─── 폼 ─── */
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group-inline { margin-bottom: 16px; }
+.form-group-inline label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.form-group-inline input, .form-group-inline select {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 13px; outline: none;
+}
+.form-group-inline input:focus, .form-group-inline select:focus { border-color: var(--blue); }
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.save-result { font-size: 12px; color: var(--green); }
+
+/* ─── 모달 ─── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: #00000088;
+  align-items: center; justify-content: center; z-index: 100;
+}
+.modal-overlay.show { display: flex; }
+.modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 28px; width: 480px; }
+.modal h3 { font-size: 16px; margin-bottom: 20px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+
+/* ─── 차트 ─── */
+.chart-container { position: relative; height: 220px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+/* ─── 감사 로그 ─── */
+.log-method { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+.log-method.GET { background: #60a5fa22; color: var(--blue); }
+.log-method.POST { background: #4ade8022; color: var(--green); }
+.log-method.PUT { background: #fbbf2422; color: var(--yellow); }
+.log-method.DELETE { background: #f8717122; color: var(--red); }
+.status-ok { color: var(--green); }
+.status-err { color: var(--red); }
+
+.empty { color: var(--muted); font-size: 13px; text-align: center; padding: 28px; }
+.loading { color: var(--muted); font-size: 13px; padding: 16px 0; }
+</style>
+</head>
+<body>
+
+<!-- 로그인 / 초기 설정 -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>domain<span>-agent</span></h1>
+    <p id="login-subtitle">관리자 로그인</p>
+    <div id="setup-fields" style="display:none">
+      <div class="form-group">
+        <label>관리자 아이디</label>
+        <input type="text" id="setup-username" placeholder="admin">
+      </div>
+      <div class="form-group">
+        <label>비밀번호 (8자 이상)</label>
+        <input type="password" id="setup-password" placeholder="••••••••">
+      </div>
+      <div class="form-group">
+        <label>비밀번호 확인</label>
+        <input type="password" id="setup-password2" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary" onclick="doSetup()">초기 설정 완료</button>
+    </div>
+    <div id="login-fields">
+      <div class="form-group">
+        <label>아이디</label>
+        <input type="text" id="login-username" placeholder="admin" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div class="form-group">
+        <label>비밀번호</label>
+        <input type="password" id="login-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <button class="btn btn-primary" onclick="doLogin()">로그인</button>
+    </div>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- 관리자 앱 -->
+<div id="app">
+  <header>
+    <h1>domain<span>-agent</span> 관리자</h1>
+    <div class="header-right">
+      <span class="admin-badge" id="admin-badge">관리자</span>
+      <button class="logout-btn" onclick="logout()">로그아웃</button>
+    </div>
+  </header>
+  <div class="layout">
+    <nav>
+      <div class="nav-section">대시보드</div>
+      <div class="nav-item active" onclick="goto('overview')"><span class="nav-icon">📊</span> 개요</div>
+      <div class="nav-section">관리</div>
+      <div class="nav-item" onclick="goto('teams')"><span class="nav-icon">👥</span> 팀 관리</div>
+      <div class="nav-item" onclick="goto('provider')"><span class="nav-icon">🤖</span> 프로바이더</div>
+      <div class="nav-item" onclick="goto('apikeys')"><span class="nav-icon">🔑</span> API 키</div>
+      <div class="nav-section">모니터링 (V2)</div>
+      <div class="nav-item" onclick="goto('tokens')"><span class="nav-icon">💰</span> 토큰 사용량</div>
+      <div class="nav-item" onclick="goto('audit')"><span class="nav-icon">📋</span> 감사 로그</div>
+    </nav>
+    <main>
+
+      <!-- 개요 -->
+      <div class="page active" id="page-overview">
+        <div class="page-title">개요</div>
+        <div class="cards">
+          <div class="card"><div class="card-label">활성 팀</div><div class="card-value green" id="s-teams">-</div></div>
+          <div class="card"><div class="card-label">총 팀원</div><div class="card-value blue" id="s-members">-</div></div>
+          <div class="card"><div class="card-label">총 메모리</div><div class="card-value purple" id="s-memories">-</div></div>
+          <div class="card"><div class="card-label">리포트</div><div class="card-value yellow" id="s-reports">-</div></div>
+          <div class="card"><div class="card-label">누적 토큰</div><div class="card-value orange" id="s-tokens">-</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">팀 현황</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>팀 이름</th><th>팀원</th><th>메모리 한도</th><th>상태</th><th>생성일</th></tr></thead>
+              <tbody id="overview-teams"><tr><td colspan="5" class="loading">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 팀 관리 -->
+      <div class="page" id="page-teams">
+        <div class="page-title">팀 관리</div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">팀 목록</span>
+            <button class="btn btn-green btn-sm" onclick="openCreateTeam()">+ 팀 생성</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>팀 이름</th><th>초대 코드</th><th>팀원</th><th>메모리 한도</th><th>상태</th><th>생성일</th><th>액션</th></tr></thead>
+              <tbody id="teams-table"><tr><td colspan="7" class="loading">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 프로바이더 설정 -->
+      <div class="page" id="page-provider">
+        <div class="page-title">프로바이더 설정</div>
+        <div class="panel">
+          <div class="panel-title">LLM 프로바이더</div>
+          <div style="margin-bottom:20px">
+            <div class="form-group-inline">
+              <label>사용 프로바이더</label>
+              <select id="prov-provider" onchange="toggleProviderFields()">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </div>
+          </div>
+          <div id="openai-fields">
+            <div class="form-row">
+              <div class="form-group-inline">
+                <label>OpenAI API 키</label>
+                <input type="password" id="prov-openai-key" placeholder="sk-proj-...">
+              </div>
+              <div class="form-group-inline">
+                <label>OpenAI 모델</label>
+                <select id="prov-openai-model">
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                  <option value="gpt-4.1">gpt-4.1</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="anthropic-fields" style="display:none">
+            <div class="form-row">
+              <div class="form-group-inline">
+                <label>Anthropic API 키</label>
+                <input type="password" id="prov-anthropic-key" placeholder="sk-ant-...">
+              </div>
+              <div class="form-group-inline">
+                <label>Anthropic 모델</label>
+                <select id="prov-anthropic-model">
+                  <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (빠름/저렴)</option>
+                  <option value="claude-sonnet-4-6">claude-sonnet-4-6 (균형)</option>
+                  <option value="claude-opus-4-7">claude-opus-4-7 (최고 성능)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <span class="save-result" id="prov-result"></span>
+            <button class="btn btn-primary btn-sm" onclick="saveProvider()">저장</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">현재 설정</div>
+          <div id="prov-current" style="color:var(--muted);font-size:13px">로딩 중...</div>
+        </div>
+      </div>
+
+      <!-- API 키 -->
+      <div class="page" id="page-apikeys">
+        <div class="page-title">API 키 관리</div>
+        <div class="panel">
+          <div class="panel-title">전체 API 키</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>팀</th><th>라벨</th><th>상태</th><th>마지막 사용</th><th>생성일</th><th>액션</th></tr></thead>
+              <tbody id="apikeys-table"><tr><td colspan="6" class="loading">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 토큰 사용량 -->
+      <div class="page" id="page-tokens">
+        <div class="page-title">토큰 사용량</div>
+        <div style="display:flex;gap:10px;margin-bottom:20px;align-items:center">
+          <span style="color:var(--muted);font-size:13px">기간:</span>
+          <select id="token-days" onchange="loadTokens()" style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);font-size:13px">
+            <option value="7">최근 7일</option>
+            <option value="30" selected>최근 30일</option>
+            <option value="90">최근 90일</option>
+          </select>
+        </div>
+        <div class="row2">
+          <div class="panel">
+            <div class="panel-title">일별 토큰 추이</div>
+            <div class="chart-container"><canvas id="chart-daily"></canvas></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">오퍼레이션별 사용량</div>
+            <div class="chart-container"><canvas id="chart-ops"></canvas></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">팀별 사용량</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>팀</th><th>프롬프트 토큰</th><th>컴플리션 토큰</th><th>합계</th><th>API 호출</th></tr></thead>
+              <tbody id="token-team-table"><tr><td colspan="5" class="empty">데이터 없음</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 감사 로그 -->
+      <div class="page" id="page-audit">
+        <div class="page-title">감사 로그</div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">API 호출 기록</span>
+            <button class="btn btn-muted btn-sm" onclick="loadAudit()">새로고침</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>시간</th><th>팀</th><th>멤버</th><th>메서드</th><th>엔드포인트</th><th>상태</th><th>IP</th></tr></thead>
+              <tbody id="audit-table"><tr><td colspan="7" class="loading">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- 팀 생성/편집 모달 -->
+<div class="modal-overlay" id="team-modal">
+  <div class="modal">
+    <h3 id="modal-title">팀 생성</h3>
+    <input type="hidden" id="modal-team-id">
+    <div class="form-group-inline">
+      <label>팀 이름</label>
+      <input type="text" id="modal-team-name" placeholder="예: 개발팀">
+    </div>
+    <div class="form-row">
+      <div class="form-group-inline">
+        <label>초대 코드</label>
+        <input type="text" id="modal-join-code" placeholder="비워두면 자동 생성">
+      </div>
+      <div class="form-group-inline">
+        <label>메모리 한도 (0=무제한)</label>
+        <input type="number" id="modal-memory-limit" value="0" min="0">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-muted btn-sm" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary btn-sm" onclick="saveTeam()">저장</button>
+    </div>
+    <div class="error-msg" id="modal-error"></div>
+  </div>
+</div>
+
+<!-- 팀원 관리 모달 -->
+<div class="modal-overlay" id="members-modal">
+  <div class="modal" style="width:600px">
+    <h3 id="members-modal-title">팀원 관리</h3>
+    <div class="table-wrap" style="max-height:400px;overflow-y:auto">
+      <table>
+        <thead><tr><th>이름</th><th>이메일</th><th>상태</th><th>마지막 활동</th><th>API 키</th><th>액션</th></tr></thead>
+        <tbody id="members-table"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-muted btn-sm" onclick="closeMembersModal()">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('admin_token') || ''
+const API = (path, method = 'GET', body = null) => {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+  }
+  if (body) opts.body = JSON.stringify(body)
+  return fetch(path, opts).then(r => {
+    if (r.status === 401) { logout(); throw new Error('401') }
+    return r.json()
+  })
+}
+
+// ── 초기화 ─────────────────────────────────────────────
+async function init() {
+  const { setup_done } = await fetch('/admin/setup/status').then(r => r.json())
+  if (!setup_done) {
+    document.getElementById('login-subtitle').textContent = '초기 관리자 설정'
+    document.getElementById('setup-fields').style.display = 'block'
+    document.getElementById('login-fields').style.display = 'none'
+    return
+  }
+  if (TOKEN) {
+    try {
+      await API('/admin/stats')
+      showApp()
+      return
+    } catch (_) { TOKEN = '' }
+  }
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none'
+  document.getElementById('app').style.display = 'block'
+  loadOverview()
+  loadProvider()
+}
+
+async function doSetup() {
+  const u = document.getElementById('setup-username').value.trim()
+  const p = document.getElementById('setup-password').value
+  const p2 = document.getElementById('setup-password2').value
+  if (!u || !p) return setLoginError('아이디와 비밀번호를 입력하세요')
+  if (p !== p2) return setLoginError('비밀번호가 일치하지 않습니다')
+  if (p.length < 8) return setLoginError('비밀번호는 8자 이상이어야 합니다')
+  const r = await fetch('/admin/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) })
+  const d = await r.json()
+  if (!r.ok) return setLoginError(d.detail || '설정 실패')
+  TOKEN = d.token
+  localStorage.setItem('admin_token', TOKEN)
+  showApp()
+}
+
+async function doLogin() {
+  const u = document.getElementById('login-username').value.trim()
+  const p = document.getElementById('login-password').value
+  if (!u || !p) return setLoginError('아이디와 비밀번호를 입력하세요')
+  const r = await fetch('/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) })
+  const d = await r.json()
+  if (!r.ok) return setLoginError(d.detail || '로그인 실패')
+  TOKEN = d.token
+  localStorage.setItem('admin_token', TOKEN)
+  showApp()
+}
+
+function setLoginError(msg) {
+  document.getElementById('login-error').textContent = msg
+}
+
+function logout() {
+  TOKEN = ''
+  localStorage.removeItem('admin_token')
+  location.reload()
+}
+
+// ── 네비게이션 ────────────────────────────────────────
+function goto(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'))
+  document.getElementById('page-' + page).classList.add('active')
+  event.currentTarget.classList.add('active')
+  if (page === 'overview') loadOverview()
+  if (page === 'teams') loadTeams()
+  if (page === 'apikeys') loadApiKeys()
+  if (page === 'tokens') loadTokens()
+  if (page === 'audit') loadAudit()
+}
+
+// ── 개요 ──────────────────────────────────────────────
+async function loadOverview() {
+  const [stats, teams] = await Promise.all([API('/admin/stats'), API('/admin/teams')])
+  document.getElementById('s-teams').textContent = stats.total_teams
+  document.getElementById('s-members').textContent = stats.total_members
+  document.getElementById('s-memories').textContent = stats.total_memories
+  document.getElementById('s-reports').textContent = stats.total_reports
+  document.getElementById('s-tokens').textContent = fmtNum(stats.total_tokens)
+
+  const tbody = document.getElementById('overview-teams')
+  tbody.innerHTML = teams.teams.map(t => `
+    <tr>
+      <td><strong>${t.name}</strong></td>
+      <td>${t.member_count}명</td>
+      <td>${t.memory_limit === 0 ? '무제한' : t.memory_limit + '개'}</td>
+      <td><span class="tag ${t.enabled ? 'on' : 'off'}">${t.enabled ? '활성' : '비활성'}</span></td>
+      <td style="color:var(--muted)">${fmtDate(t.created_at)}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="empty">팀 없음</td></tr>'
+}
+
+// ── 팀 관리 ───────────────────────────────────────────
+let _editTeamId = null
+
+async function loadTeams() {
+  const { teams } = await API('/admin/teams')
+  const tbody = document.getElementById('teams-table')
+  tbody.innerHTML = teams.map(t => `
+    <tr>
+      <td><strong>${t.name}</strong></td>
+      <td><code style="font-size:12px;color:var(--blue)">${t.join_code}</code></td>
+      <td>${t.member_count}명</td>
+      <td>${t.memory_limit === 0 ? '무제한' : t.memory_limit + '개'}</td>
+      <td><span class="tag ${t.enabled ? 'on' : 'off'}">${t.enabled ? '활성' : '비활성'}</span></td>
+      <td style="color:var(--muted)">${fmtDate(t.created_at)}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-muted btn-sm" onclick="openMembers('${t.id}','${t.name}')">팀원</button>
+        <button class="btn btn-muted btn-sm" onclick="openEditTeam(${JSON.stringify(t)})">편집</button>
+        <button class="btn btn-muted btn-sm" onclick="regenCode('${t.id}')">코드 재발급</button>
+        <button class="btn btn-danger btn-sm" onclick="toggleTeam('${t.id}',${t.enabled})">${t.enabled ? '비활성화' : '활성화'}</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">팀 없음</td></tr>'
+}
+
+function openCreateTeam() {
+  _editTeamId = null
+  document.getElementById('modal-title').textContent = '팀 생성'
+  document.getElementById('modal-team-name').value = ''
+  document.getElementById('modal-join-code').value = ''
+  document.getElementById('modal-memory-limit').value = '0'
+  document.getElementById('modal-error').textContent = ''
+  document.getElementById('team-modal').classList.add('show')
+}
+
+function openEditTeam(t) {
+  _editTeamId = t.id
+  document.getElementById('modal-title').textContent = '팀 편집'
+  document.getElementById('modal-team-name').value = t.name
+  document.getElementById('modal-join-code').value = t.join_code
+  document.getElementById('modal-memory-limit').value = t.memory_limit
+  document.getElementById('modal-error').textContent = ''
+  document.getElementById('team-modal').classList.add('show')
+}
+
+function closeModal() {
+  document.getElementById('team-modal').classList.remove('show')
+}
+
+async function saveTeam() {
+  const name = document.getElementById('modal-team-name').value.trim()
+  if (!name) { document.getElementById('modal-error').textContent = '팀 이름 필수'; return }
+  const memory_limit = parseInt(document.getElementById('modal-memory-limit').value) || 0
+
+  if (_editTeamId) {
+    await API(`/admin/team/${_editTeamId}`, 'PUT', { name, memory_limit })
+  } else {
+    const join_code = document.getElementById('modal-join-code').value.trim()
+    await fetch('/admin/team' + (name ? `?name=${encodeURIComponent(name)}` + (join_code ? `&join_code=${encodeURIComponent(join_code)}` : '') : ''), { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}` } })
+  }
+  closeModal()
+  loadTeams()
+}
+
+async function toggleTeam(teamId, currentEnabled) {
+  await API(`/admin/team/${teamId}`, 'PUT', { enabled: !currentEnabled })
+  loadTeams()
+}
+
+async function regenCode(teamId) {
+  if (!confirm('초대 코드를 재발급하면 기존 코드는 무효화됩니다. 계속할까요?')) return
+  const r = await API(`/admin/team/${teamId}`, 'PUT', { regenerate_join_code: true })
+  alert('새 초대 코드: ' + r.join_code)
+  loadTeams()
+}
+
+// ── 팀원 관리 모달 ─────────────────────────────────────
+let _currentTeamId = ''
+
+async function openMembers(teamId, teamName) {
+  _currentTeamId = teamId
+  document.getElementById('members-modal-title').textContent = `${teamName} - 팀원 관리`
+  document.getElementById('members-modal').classList.add('show')
+  await loadMembers(teamId)
+}
+
+function closeMembersModal() {
+  document.getElementById('members-modal').classList.remove('show')
+}
+
+async function loadMembers(teamId) {
+  const { members } = await API(`/admin/team/${teamId}/members`)
+  const tbody = document.getElementById('members-table')
+  tbody.innerHTML = members.map(m => `
+    <tr>
+      <td>${m.name}</td>
+      <td style="color:var(--muted)">${m.email || '-'}</td>
+      <td><span class="tag ${m.enabled ? 'on' : 'off'}">${m.enabled ? '활성' : '비활성'}</span></td>
+      <td style="color:var(--muted)">${m.last_active ? fmtDate(m.last_active) : '-'}</td>
+      <td><span class="tag ${m.api_key_enabled ? 'blue' : 'off'}">${m.api_key_enabled ? '유효' : '만료'}</span></td>
+      <td>
+        <button class="btn ${m.enabled ? 'btn-danger' : 'btn-green'} btn-sm" onclick="toggleMember('${m.id}',${m.enabled})">${m.enabled ? '비활성화' : '활성화'}</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">팀원 없음</td></tr>'
+}
+
+async function toggleMember(memberId, currentEnabled) {
+  await API(`/admin/member/${memberId}`, 'PUT', { enabled: !currentEnabled })
+  await loadMembers(_currentTeamId)
+}
+
+// ── 프로바이더 설정 ────────────────────────────────────
+async function loadProvider() {
+  const d = await API('/admin/provider')
+  document.getElementById('prov-provider').value = d.provider
+  document.getElementById('prov-openai-model').value = d.openai_model || 'gpt-4o-mini'
+  document.getElementById('prov-anthropic-model').value = d.anthropic_model || 'claude-haiku-4-5-20251001'
+  toggleProviderFields()
+
+  const cur = document.getElementById('prov-current')
+  const keyInfo = d.provider === 'openai'
+    ? `OpenAI 키: ${d.openai_key_set ? '✅ 설정됨' : '❌ 미설정'} · 모델: ${d.openai_model}`
+    : `Anthropic 키: ${d.anthropic_key_set ? '✅ 설정됨' : '❌ 미설정'} · 모델: ${d.anthropic_model}`
+  cur.innerHTML = `<strong>현재 프로바이더:</strong> ${d.provider} &nbsp;|&nbsp; ${keyInfo}` + (d.updated_at ? ` &nbsp;|&nbsp; 업데이트: ${fmtDate(d.updated_at)}` : '')
+}
+
+function toggleProviderFields() {
+  const p = document.getElementById('prov-provider').value
+  document.getElementById('openai-fields').style.display = p === 'openai' ? 'block' : 'none'
+  document.getElementById('anthropic-fields').style.display = p === 'anthropic' ? 'block' : 'none'
+}
+
+async function saveProvider() {
+  const body = {
+    provider: document.getElementById('prov-provider').value,
+    openai_api_key: document.getElementById('prov-openai-key').value,
+    openai_model: document.getElementById('prov-openai-model').value,
+    anthropic_api_key: document.getElementById('prov-anthropic-key').value,
+    anthropic_model: document.getElementById('prov-anthropic-model').value,
+  }
+  await API('/admin/provider', 'PUT', body)
+  document.getElementById('prov-result').textContent = '✅ 저장됨'
+  setTimeout(() => { document.getElementById('prov-result').textContent = '' }, 3000)
+  await loadProvider()
+}
+
+// ── API 키 ─────────────────────────────────────────────
+async function loadApiKeys() {
+  const { api_keys } = await API('/admin/apikeys')
+  const tbody = document.getElementById('apikeys-table')
+  tbody.innerHTML = api_keys.map(k => `
+    <tr>
+      <td>${k.team_name}</td>
+      <td>${k.label}</td>
+      <td><span class="tag ${k.enabled ? 'on' : 'off'}">${k.enabled ? '활성' : '만료'}</span></td>
+      <td style="color:var(--muted)">${k.last_used_at ? fmtDate(k.last_used_at) : '없음'}</td>
+      <td style="color:var(--muted)">${fmtDate(k.created_at)}</td>
+      <td>${k.enabled ? `<button class="btn btn-danger btn-sm" onclick="revokeKey('${k.id}')">만료처리</button>` : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">API 키 없음</td></tr>'
+}
+
+async function revokeKey(keyId) {
+  if (!confirm('이 API 키를 만료처리하면 해당 팀원이 접속할 수 없습니다. 계속할까요?')) return
+  await API(`/admin/apikey/${keyId}`, 'DELETE')
+  loadApiKeys()
+}
+
+// ── 토큰 사용량 ────────────────────────────────────────
+let dailyChart = null, opsChart = null
+
+async function loadTokens() {
+  const days = document.getElementById('token-days').value
+  const d = await API(`/admin/tokens?days=${days}`)
+
+  // 일별 차트
+  if (dailyChart) dailyChart.destroy()
+  dailyChart = new Chart(document.getElementById('chart-daily'), {
+    type: 'bar',
+    data: {
+      labels: d.daily.map(x => x.day.slice(5)),
+      datasets: [{ label: '토큰', data: d.daily.map(x => x.total), backgroundColor: '#60a5fa66', borderColor: '#60a5fa', borderWidth: 1 }],
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#64748b' }, grid: { color: '#2e3347' } }, y: { ticks: { color: '#64748b' }, grid: { color: '#2e3347' } } } },
+  })
+
+  // 오퍼레이션 차트
+  if (opsChart) opsChart.destroy()
+  const colors = ['#60a5fa', '#4ade80', '#a78bfa', '#fbbf24', '#f87171']
+  opsChart = new Chart(document.getElementById('chart-ops'), {
+    type: 'doughnut',
+    data: {
+      labels: d.by_operation.map(x => x.operation),
+      datasets: [{ data: d.by_operation.map(x => x.total), backgroundColor: colors }],
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#e2e8f0', font: { size: 11 } } } } },
+  })
+
+  // 팀별 테이블
+  const tbody = document.getElementById('token-team-table')
+  tbody.innerHTML = d.by_team.map(t => `
+    <tr>
+      <td>${t.team || '(없음)'}</td>
+      <td>${fmtNum(t.prompt)}</td>
+      <td>${fmtNum(t.completion)}</td>
+      <td><strong>${fmtNum(t.prompt + t.completion)}</strong></td>
+      <td>${t.calls}회</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="empty">데이터 없음</td></tr>'
+}
+
+// ── 감사 로그 ──────────────────────────────────────────
+async function loadAudit() {
+  const { logs } = await API('/admin/audit?limit=200')
+  const tbody = document.getElementById('audit-table')
+  tbody.innerHTML = logs.map(l => `
+    <tr>
+      <td style="color:var(--muted);white-space:nowrap">${fmtDate(l.created_at)}</td>
+      <td>${l.team_name || '-'}</td>
+      <td>${l.member_name || '-'}</td>
+      <td><span class="log-method ${l.method}">${l.method}</span></td>
+      <td style="font-size:12px;color:var(--blue)">${l.endpoint}</td>
+      <td class="${l.status_code < 400 ? 'status-ok' : 'status-err'}">${l.status_code}</td>
+      <td style="color:var(--muted)">${l.ip_address}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">로그 없음</td></tr>'
+}
+
+// ── 유틸 ───────────────────────────────────────────────
+function fmtDate(iso) {
+  const d = new Date(iso)
+  return d.toLocaleDateString('ko-KR') + ' ' + d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function fmtNum(n) {
+  if (!n) return '0'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return n.toString()
+}
+
+init()
+</script>
+</body>
+</html>

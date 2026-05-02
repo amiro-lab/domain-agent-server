@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>domain-agent 팀 대시보드</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f1117; --bg2: #1a1d27; --bg3: #242838;
+    --border: #2e3347; --text: #e2e8f0; --muted: #64748b;
+    --green: #4ade80; --blue: #60a5fa; --purple: #a78bfa;
+    --yellow: #fbbf24; --red: #f87171;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+  header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 16px 28px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header h1 span { color: var(--green); }
+  .team-badge { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 4px 14px; font-size: 12px; color: var(--muted); }
+  .refresh { color: var(--muted); font-size: 12px; }
+
+  main { padding: 24px 28px; max-width: 1400px; }
+
+  /* 카드 그리드 */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
+  .card-value { font-size: 32px; font-weight: 700; }
+  .card-value.green { color: var(--green); }
+  .card-value.blue { color: var(--blue); }
+  .card-value.purple { color: var(--purple); }
+  .card-value.yellow { color: var(--yellow); }
+  .card-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* 2단 레이아웃 */
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .row.three { grid-template-columns: 2fr 1fr; }
+
+  .panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .panel-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 16px; }
+
+  /* 팀원 테이블 */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--blue); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; margin-right: 8px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .badge.chatgpt { background: #10a37f22; color: #10a37f; }
+  .badge.claude { background: #cc785122; color: #cc7851; }
+  .badge.claude-code { background: #60a5fa22; color: var(--blue); }
+
+  /* 도메인 태그 목록 */
+  .tag-row { display: flex; align-items: center; margin-bottom: 10px; gap: 10px; }
+  .tag-name { font-size: 12px; color: var(--text); min-width: 160px; }
+  .tag-bar-wrap { flex: 1; background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; }
+  .tag-bar { height: 100%; border-radius: 4px; background: var(--blue); }
+  .tag-count { font-size: 12px; color: var(--muted); min-width: 32px; text-align: right; }
+
+  /* 리포트 목록 */
+  .report-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .report-item:last-child { border-bottom: none; }
+  .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .report-type { font-size: 11px; font-weight: 600; }
+  .report-type.weekly { color: var(--purple); }
+  .report-type.daily { color: var(--yellow); }
+  .report-period { font-size: 12px; color: var(--muted); }
+  .report-preview { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* 활동 피드 */
+  .feed-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .feed-item:last-child { border-bottom: none; }
+  .feed-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-top: 5px; flex-shrink: 0; }
+  .feed-text { font-size: 12px; line-height: 1.5; }
+  .feed-time { color: var(--muted); font-size: 11px; }
+
+  .loading { color: var(--muted); font-size: 13px; padding: 20px 0; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>domain<span>-agent</span> 팀 대시보드</h1>
+  <div style="display:flex;gap:12px;align-items:center">
+    <span class="team-badge" id="team-name">로딩 중...</span>
+    <span class="refresh" id="refresh-time"></span>
+  </div>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="card-label">총 팀 메모리</div><div class="card-value green" id="total-mem">-</div><div class="card-sub">누적 도메인 지식</div></div>
+    <div class="card"><div class="card-label">팀원</div><div class="card-value blue" id="total-members">-</div><div class="card-sub">활성 멤버</div></div>
+    <div class="card"><div class="card-label">이번 주 신규</div><div class="card-value purple" id="weekly-new">-</div><div class="card-sub">새로 학습된 항목</div></div>
+    <div class="card"><div class="card-label">도메인 태그</div><div class="card-value yellow" id="total-tags">-</div><div class="card-sub">커버리지</div></div>
+  </div>
+
+  <div class="row three">
+    <div class="panel">
+      <div class="panel-title">팀원별 기여</div>
+      <table>
+        <thead><tr><th>팀원</th><th>메모리</th><th>주요 플랫폼</th><th>마지막 활동</th></tr></thead>
+        <tbody id="members-table"><tr><td colspan="4" class="loading">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel-title">도메인 태그 분포</div>
+      <div id="tags-list" class="loading">로딩 중...</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title">최근 리포트</div>
+      <div id="reports-list" class="loading">로딩 중...</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">최근 캡처 활동</div>
+      <div id="feed-list" class="loading">로딩 중...</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const API_KEY = new URLSearchParams(location.search).get('key') || ''
+const headers = { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }
+
+async function get(path) {
+  const r = await fetch(path, { headers })
+  if (!r.ok) throw new Error(r.status)
+  return r.json()
+}
+
+function timeAgo(iso) {
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
+  if (diff < 60) return `${diff}초 전`
+  if (diff < 3600) return `${Math.floor(diff/60)}분 전`
+  if (diff < 86400) return `${Math.floor(diff/3600)}시간 전`
+  return `${Math.floor(diff/86400)}일 전`
+}
+
+function platformBadge(p) {
+  const map = { chatgpt: 'ChatGPT', claude: 'Claude.ai', 'claude-code': 'Claude Code', unknown: '-' }
+  return `<span class="badge ${p}">${map[p] || p}</span>`
+}
+
+function initials(name) {
+  return (name || '?').slice(0, 2)
+}
+
+async function load() {
+  try {
+    const [domain, members, reports, weekly] = await Promise.all([
+      get('/api/domain'),
+      get('/api/domain/members'),
+      get('/api/reports?limit=5'),
+      get('/api/report/weekly').catch(() => ({ new_count: 0 })),
+    ])
+
+    // 카드
+    document.getElementById('total-mem').textContent = domain.total
+    document.getElementById('total-members').textContent = members.members.length
+    document.getElementById('weekly-new').textContent = weekly.new_count ?? 0
+    document.getElementById('total-tags').textContent = Object.keys(domain.groups).length
+
+    // 팀원 테이블
+    const memberMems = Object.fromEntries(members.members.map(m => [m.name, m.memory_count]))
+    const tbody = document.getElementById('members-table')
+    if (!members.members.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">팀원 없음</td></tr>'
+    } else {
+      // 팀원별 상세 정보 요청
+      const memberDetails = await Promise.all(
+        members.members.map(m => get(`/api/domain/member/${encodeURIComponent(m.name)}`))
+      )
+      tbody.innerHTML = members.members.map((m, i) => {
+        const detail = memberDetails[i]
+        const platforms = new Set()
+        Object.values(detail.groups || {}).flat().forEach(mem => { if (mem.platform) platforms.add(mem.platform) })
+        const platHtml = [...platforms].map(platformBadge).join(' ') || '-'
+        return `<tr>
+          <td><span class="avatar">${initials(m.name)}</span>${m.name}</td>
+          <td><strong>${m.memory_count}</strong></td>
+          <td>${platHtml}</td>
+          <td style="color:var(--muted)">-</td>
+        </tr>`
+      }).join('')
+    }
+
+    // 태그 분포
+    const tagEl = document.getElementById('tags-list')
+    const groups = domain.groups
+    const maxCount = Math.max(...Object.values(groups).map(v => v.length), 1)
+    if (!Object.keys(groups).length) {
+      tagEl.innerHTML = '<div class="empty">도메인 태그 없음</div>'
+    } else {
+      tagEl.innerHTML = Object.entries(groups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 12)
+        .map(([tag, mems]) => `
+          <div class="tag-row">
+            <div class="tag-name">${tag}</div>
+            <div class="tag-bar-wrap"><div class="tag-bar" style="width:${(mems.length/maxCount*100).toFixed(0)}%"></div></div>
+            <div class="tag-count">${mems.length}</div>
+          </div>
+        `).join('')
+    }
+
+    // 리포트
+    const repEl = document.getElementById('reports-list')
+    if (!reports.reports.length) {
+      repEl.innerHTML = '<div class="empty">리포트 없음</div>'
+    } else {
+      repEl.innerHTML = reports.reports.map(r => `
+        <div class="report-item">
+          <div class="report-header">
+            <span class="report-type ${r.type}">${r.type === 'weekly' ? '위클리' : '데일리'}</span>
+            <span class="report-period">${r.period} · 신규 ${r.new_count}개</span>
+          </div>
+          <div class="report-preview">${r.preview.replace(/[#*`]/g, '').slice(0, 120)}...</div>
+        </div>
+      `).join('')
+    }
+
+    // 최근 메모리 피드
+    const mems = await get('/api/memory?limit=8').catch(() => ({ memories: [] }))
+    const feedEl = document.getElementById('feed-list')
+    if (!mems.memories?.length) {
+      feedEl.innerHTML = '<div class="empty">최근 활동 없음</div>'
+    } else {
+      feedEl.innerHTML = mems.memories
+        .sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 8)
+        .map(m => `
+          <div class="feed-item">
+            <div class="feed-dot"></div>
+            <div>
+              <div class="feed-text">${m.description}</div>
+              <div class="feed-time">${m.captured_by || '미설정'} · ${platformBadge(m.platform || 'unknown')} · ${timeAgo(m.created_at)}</div>
+            </div>
+          </div>
+        `).join('')
+    }
+
+    document.getElementById('refresh-time').textContent = `마지막 업데이트: ${new Date().toLocaleTimeString('ko-KR')}`
+  } catch (e) {
+    if (e.message === '401') {
+      document.querySelector('main').innerHTML = `
+        <div style="text-align:center;padding:80px;color:var(--muted)">
+          <div style="font-size:48px;margin-bottom:16px">🔐</div>
+          <div style="font-size:18px;margin-bottom:8px">인증 필요</div>
+          <div>URL에 <code>?key=팀_API_키</code>를 추가해주세요</div>
+        </div>`
+    }
+    console.error(e)
+  }
+}
+
+// 팀 이름 로드
+get('/api/team/info').then(d => {
+  document.getElementById('team-name').textContent = d.name
+}).catch(() => {
+  document.getElementById('team-name').textContent = '팀'
+})
+
+load()
+setInterval(load, 30_000)
+</script>
+</body>
+</html>

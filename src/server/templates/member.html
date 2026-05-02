@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>domain-agent 내 도메인</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0f1117; --bg2: #1a1d27; --bg3: #242838; --border: #2e3347;
+  --text: #e2e8f0; --muted: #64748b;
+  --green: #4ade80; --blue: #60a5fa; --purple: #a78bfa;
+  --yellow: #fbbf24; --red: #f87171;
+}
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; min-height: 100vh; }
+
+/* ─── 로그인 ─── */
+#login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.login-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 40px; width: 380px; }
+.login-logo { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.login-logo span { color: var(--green); }
+.login-sub { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+.form-group input, .form-group select {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none;
+}
+.form-group input:focus, .form-group select:focus { border-color: var(--blue); }
+.btn { padding: 11px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+.btn:hover { opacity: .85; }
+.btn-primary { background: var(--blue); color: #fff; width: 100%; }
+.btn-sm { padding: 6px 14px; font-size: 12px; width: auto; }
+.btn-muted { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
+.error-msg { color: var(--red); font-size: 12px; margin-top: 10px; text-align: center; }
+
+/* ─── 앱 레이아웃 ─── */
+#app { display: none; }
+header {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 0 28px; display: flex; align-items: center; justify-content: space-between; height: 56px;
+}
+header h1 { font-size: 17px; font-weight: 600; }
+header h1 span { color: var(--green); }
+.header-right { display: flex; align-items: center; gap: 14px; }
+.member-info { display: flex; align-items: center; gap: 8px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--blue); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
+.member-name { font-size: 13px; font-weight: 600; }
+.team-badge { background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 3px 12px; font-size: 11px; color: var(--muted); }
+.logout-btn { color: var(--muted); font-size: 12px; cursor: pointer; background: none; border: none; }
+.logout-btn:hover { color: var(--red); }
+
+/* ─── 탭 ─── */
+.tabs { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 28px; display: flex; gap: 4px; }
+.tab { padding: 14px 18px; cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all .15s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+main { padding: 28px; max-width: 1200px; }
+.page { display: none; }
+.page.active { display: block; }
+
+/* ─── 카드 ─── */
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.card-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+.card-value { font-size: 30px; font-weight: 700; }
+.card-value.green { color: var(--green); }
+.card-value.blue { color: var(--blue); }
+.card-value.purple { color: var(--purple); }
+.card-value.yellow { color: var(--yellow); }
+.card-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ─── 패널 ─── */
+.panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.panel-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 16px; }
+.row2 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px; }
+
+/* ─── 메모리 카드 ─── */
+.memory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.memory-card {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px;
+}
+.memory-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mem-type { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+.mem-type.fact { background: #60a5fa22; color: var(--blue); }
+.mem-type.preference { background: #a78bfa22; color: var(--purple); }
+.mem-type.ontology { background: #4ade8022; color: var(--green); }
+.mem-conf { font-size: 11px; color: var(--muted); }
+.mem-desc { font-size: 13px; font-weight: 500; margin-bottom: 6px; line-height: 1.4; }
+.mem-content { font-size: 12px; color: var(--muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mem-tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+.mem-tag { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font-size: 10px; color: var(--muted); }
+.mem-time { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* ─── 태그 분포 ─── */
+.tag-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.tag-name { font-size: 12px; min-width: 140px; color: var(--text); }
+.tag-bar-wrap { flex: 1; background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; }
+.tag-bar { height: 100%; border-radius: 4px; }
+.tag-count { font-size: 12px; color: var(--muted); min-width: 28px; text-align: right; }
+
+/* ─── 팀원 기여 ─── */
+.contrib-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.contrib-row:last-child { border-bottom: none; }
+.contrib-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
+.contrib-name { flex: 1; font-size: 13px; }
+.contrib-me { font-size: 10px; color: var(--blue); font-weight: 600; margin-left: 6px; }
+.contrib-bar-wrap { width: 120px; background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; }
+.contrib-bar { height: 100%; border-radius: 4px; background: var(--blue); }
+.contrib-count { font-size: 13px; font-weight: 600; min-width: 32px; text-align: right; }
+
+/* ─── 리포트 ─── */
+.report-item { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.report-item:last-child { border-bottom: none; }
+.report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.report-type { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.report-type.weekly { color: var(--purple); }
+.report-type.daily { color: var(--yellow); }
+.report-period { font-size: 12px; color: var(--muted); }
+.report-toggle { font-size: 11px; color: var(--blue); cursor: pointer; background: none; border: none; }
+.report-preview { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.report-full { font-size: 13px; color: var(--text); line-height: 1.7; white-space: pre-wrap; display: none; }
+.report-full.show { display: block; }
+
+/* ─── 검색 ─── */
+.search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+.search-input { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; color: var(--text); font-size: 13px; outline: none; }
+.search-input:focus { border-color: var(--blue); }
+
+.empty { color: var(--muted); font-size: 13px; text-align: center; padding: 32px; }
+.loading { color: var(--muted); font-size: 13px; padding: 12px 0; }
+</style>
+</head>
+<body>
+
+<!-- 로그인 -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">domain<span>-agent</span></div>
+    <div class="login-sub">팀원 로그인 — 내 도메인 지식 확인</div>
+
+    <div class="form-group">
+      <label>이름</label>
+      <input type="text" id="login-name" placeholder="홍길동" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-group">
+      <label>이메일</label>
+      <input type="email" id="login-email" placeholder="you@company.com" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-group" id="team-select-group" style="display:none">
+      <label>팀 선택</label>
+      <select id="login-team"></select>
+    </div>
+
+    <button class="btn btn-primary" onclick="doLogin()">로그인</button>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- 앱 -->
+<div id="app">
+  <header>
+    <h1>domain<span>-agent</span></h1>
+    <div class="header-right">
+      <div class="member-info">
+        <div class="avatar" id="hdr-avatar">?</div>
+        <span class="member-name" id="hdr-name"></span>
+        <span class="team-badge" id="hdr-team"></span>
+      </div>
+      <button class="logout-btn" onclick="logout()">로그아웃</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" onclick="goto('my', this)">내 도메인</div>
+    <div class="tab" onclick="goto('memories', this)">메모리 목록</div>
+    <div class="tab" onclick="goto('team', this)">팀 현황</div>
+    <div class="tab" onclick="goto('knowledge', this)">팀 지식 검색</div>
+    <div class="tab" onclick="goto('reports', this)">리포트</div>
+  </div>
+
+  <main>
+
+    <!-- 내 도메인 -->
+    <div class="page active" id="page-my">
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">내 메모리</div>
+          <div class="card-value green" id="my-total">-</div>
+          <div class="card-sub">내가 캡처한 도메인 지식</div>
+        </div>
+        <div class="card">
+          <div class="card-label">팀 전체</div>
+          <div class="card-value blue" id="team-total">-</div>
+          <div class="card-sub">팀 누적 도메인 지식</div>
+        </div>
+        <div class="card">
+          <div class="card-label">내 기여율</div>
+          <div class="card-value purple" id="my-pct">-</div>
+          <div class="card-sub">팀 대비 내 비중</div>
+        </div>
+        <div class="card">
+          <div class="card-label">태그 수</div>
+          <div class="card-value yellow" id="my-tags">-</div>
+          <div class="card-sub">내 도메인 커버리지</div>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div class="panel">
+          <div class="panel-title">내 태그별 도메인 지식</div>
+          <div id="my-tag-list" class="loading">로딩 중...</div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">팀원 기여 현황</div>
+          <div id="team-contrib" class="loading">로딩 중...</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">최근 내 캡처</div>
+        <div id="my-recent" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
+    <!-- 메모리 목록 -->
+    <div class="page" id="page-memories">
+      <div class="search-bar">
+        <input class="search-input" id="search-input" placeholder="메모리 검색..." oninput="filterMemories()">
+      </div>
+      <div id="memories-grid" class="memory-grid"></div>
+    </div>
+
+    <!-- 팀 현황 -->
+    <div class="page" id="page-team">
+      <div class="panel">
+        <div class="panel-title">팀 도메인 태그 분포</div>
+        <div id="team-tag-list" class="loading">로딩 중...</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">팀 전체 메모리 — 태그별</div>
+        <div id="team-domain-groups" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
+    <!-- 팀 지식 검색 -->
+    <div class="page" id="page-knowledge">
+      <div class="panel">
+        <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>팀 지식 검색</span>
+          <button onclick="toggleMemoForm()" style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">+ 직접 추가</button>
+        </div>
+
+        <!-- 메모 직접 추가 폼 -->
+        <div id="memo-form" style="display:none;background:var(--surface2);border-radius:8px;padding:16px;margin-bottom:16px;">
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;">팀 지식 직접 추가</div>
+          <textarea id="memo-desc" placeholder="내용을 입력하세요 (예: 정산 배치는 매일 03시에 실행됨)" rows="3"
+            style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:6px;
+            color:var(--text);padding:10px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+          <input id="memo-tags" placeholder="태그 (예: team:billing, domain:batch)" style="width:100%;margin-top:8px;
+            background:var(--surface);border:1px solid var(--border);border-radius:6px;
+            color:var(--text);padding:8px 10px;font-size:12px;box-sizing:border-box;">
+          <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+            <select id="memo-type" style="background:var(--surface);border:1px solid var(--border);
+              border-radius:6px;color:var(--text);padding:6px 10px;font-size:12px;">
+              <option value="fact">fact</option>
+              <option value="preference">preference</option>
+              <option value="ontology">ontology</option>
+            </select>
+            <button onclick="submitMemo()" style="background:var(--blue);color:#fff;border:none;
+              border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">저장</button>
+            <button onclick="toggleMemoForm()" style="background:none;border:1px solid var(--border);
+              color:var(--muted);border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer;">취소</button>
+          </div>
+        </div>
+
+        <!-- 검색 -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <input id="kn-search" placeholder="키워드 검색..." oninput="searchKnowledge()"
+            style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:6px;
+            color:var(--text);padding:8px 12px;font-size:13px;">
+        </div>
+        <!-- 태그 필터 -->
+        <div id="kn-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+        <!-- 결과 -->
+        <div id="kn-count" style="font-size:12px;color:var(--muted);margin-bottom:8px;"></div>
+        <div id="kn-results" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
+    <!-- 리포트 -->
+    <div class="page" id="page-reports">
+      <div class="panel">
+        <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>내 위클리</span>
+          <button id="btn-gen-weekly" onclick="generateWeekly()" style="
+            background:var(--purple);color:#fff;border:none;border-radius:6px;
+            padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            위클리 작성하기
+          </button>
+        </div>
+        <div id="weekly-result" style="display:none;margin-bottom:24px;">
+          <div id="weekly-period" style="font-size:12px;color:var(--muted);margin-bottom:10px;"></div>
+          <div id="weekly-content" style="font-size:13px;line-height:1.8;white-space:pre-wrap;color:var(--text);
+            background:var(--surface2);border-radius:8px;padding:16px;"></div>
+          <button onclick="copyWeekly()" style="margin-top:10px;background:none;border:1px solid var(--border);
+            color:var(--muted);border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;">
+            📋 클립보드 복사
+          </button>
+        </div>
+        <div class="panel-title" style="margin-top:8px;">팀 리포트 기록</div>
+        <div id="reports-list" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+let TOKEN = localStorage.getItem('member_token') || ''
+let ME = JSON.parse(localStorage.getItem('member_me') || 'null')
+let _allMems = []
+
+const API = (path, method = 'GET', body = null) => {
+  const opts = { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` } }
+  if (body) opts.body = JSON.stringify(body)
+  return fetch(path, opts).then(r => {
+    if (r.status === 401) { logout(); throw new Error('401') }
+    if (!r.ok) return r.json().then(e => { throw new Error(e.detail || r.status) })
+    return r.json()
+  })
+}
+
+// ── 초기화 ──────────────────────────────────────────────
+async function init() {
+  // 팀 목록 미리 로드
+  const { teams } = await fetch('/api/teams').then(r => r.json()).catch(() => ({ teams: [] }))
+  if (teams.length > 1) {
+    const sel = document.getElementById('login-team')
+    sel.innerHTML = teams.map(t => `<option value="${t.id}">${t.name} (${t.member_count}명)</option>`).join('')
+    document.getElementById('team-select-group').style.display = 'block'
+  }
+
+  if (TOKEN && ME) {
+    try {
+      await API('/member/me')
+      showApp()
+      return
+    } catch (_) { TOKEN = ''; ME = null }
+  }
+}
+
+async function doLogin() {
+  const name = document.getElementById('login-name').value.trim()
+  const email = document.getElementById('login-email').value.trim()
+  const teamSel = document.getElementById('login-team')
+  const team_id = teamSel.closest('#team-select-group').style.display !== 'none' ? teamSel.value : null
+
+  if (!name && !email) return setErr('이름 또는 이메일을 입력하세요')
+
+  try {
+    const d = await fetch('/member/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, team_id }),
+    }).then(async r => {
+      if (!r.ok) { const e = await r.json(); throw new Error(e.detail) }
+      return r.json()
+    })
+    TOKEN = d.token
+    ME = { name: d.member_name, team: d.team_name }
+    localStorage.setItem('member_token', TOKEN)
+    localStorage.setItem('member_me', JSON.stringify(ME))
+    showApp()
+  } catch (e) {
+    setErr(e.message || '로그인 실패')
+  }
+}
+
+function setErr(msg) { document.getElementById('login-error').textContent = msg }
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none'
+  document.getElementById('app').style.display = 'block'
+  const initials = (ME.name || '?').slice(0, 2)
+  document.getElementById('hdr-avatar').textContent = initials
+  document.getElementById('hdr-name').textContent = ME.name
+  document.getElementById('hdr-team').textContent = ME.team
+  loadMyDomain()
+}
+
+function logout() {
+  TOKEN = ''; ME = null
+  localStorage.removeItem('member_token')
+  localStorage.removeItem('member_me')
+  location.reload()
+}
+
+// ── 탭 ──────────────────────────────────────────────────
+function goto(page, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
+  document.getElementById('page-' + page).classList.add('active')
+  el.classList.add('active')
+  if (page === 'my') loadMyDomain()
+  if (page === 'memories') loadMemories()
+  if (page === 'team') loadTeamDomain()
+  if (page === 'knowledge') loadKnowledge()
+  if (page === 'reports') loadReports()
+}
+
+// ── 내 도메인 ────────────────────────────────────────────
+async function loadMyDomain() {
+  const [myDomain, teamDomain, members, myMems] = await Promise.all([
+    API('/member/domain'),
+    API('/member/team-domain'),
+    API('/member/team-members'),
+    API('/member/memories'),
+  ])
+
+  // 카드
+  const myTotal = myDomain.total || 0
+  const teamTotal = teamDomain.total || 0
+  const pct = teamTotal > 0 ? Math.round(myTotal / teamTotal * 100) : 0
+  document.getElementById('my-total').textContent = myTotal
+  document.getElementById('team-total').textContent = teamTotal
+  document.getElementById('my-pct').textContent = pct + '%'
+  document.getElementById('my-tags').textContent = Object.keys(myDomain.groups || {}).length
+
+  // 내 태그 분포
+  const tagEl = document.getElementById('my-tag-list')
+  const groups = myDomain.groups || {}
+  const maxCount = Math.max(...Object.values(groups).map(v => v.length), 1)
+  if (!Object.keys(groups).length) {
+    tagEl.innerHTML = '<div class="empty">아직 캡처된 도메인 지식이 없습니다</div>'
+  } else {
+    const colors = ['#60a5fa','#4ade80','#a78bfa','#fbbf24','#f87171','#fb923c']
+    tagEl.innerHTML = Object.entries(groups)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([tag, mems], i) => `
+        <div class="tag-row">
+          <div class="tag-name">${tag}</div>
+          <div class="tag-bar-wrap"><div class="tag-bar" style="width:${(mems.length/maxCount*100).toFixed(0)}%;background:${colors[i%colors.length]}"></div></div>
+          <div class="tag-count">${mems.length}</div>
+        </div>
+      `).join('')
+  }
+
+  // 팀원 기여 현황
+  const contribEl = document.getElementById('team-contrib')
+  const maxMem = Math.max(...members.members.map(m => m.memory_count), 1)
+  contribEl.innerHTML = members.members.map(m => `
+    <div class="contrib-row">
+      <div class="contrib-avatar" style="background:${m.is_me ? '#60a5fa' : '#a78bfa'}">${(m.name||'?').slice(0,2)}</div>
+      <div class="contrib-name">${m.name}${m.is_me ? '<span class="contrib-me">나</span>' : ''}</div>
+      <div class="contrib-bar-wrap"><div class="contrib-bar" style="width:${(m.memory_count/maxMem*100).toFixed(0)}%;background:${m.is_me ? '#60a5fa' : '#a78bfa'}"></div></div>
+      <div class="contrib-count">${m.memory_count}</div>
+    </div>
+  `).join('') || '<div class="empty">팀원 없음</div>'
+
+  // 최근 내 캡처
+  const recentEl = document.getElementById('my-recent')
+  const recent = (myMems.memories || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5)
+  recentEl.innerHTML = recent.map(m => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span class="mem-type ${m.type}">${m.type}</span>
+        <span style="font-size:13px;font-weight:500">${m.description}</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted)">${m.platform || 'unknown'} · ${timeAgo(m.created_at)}</div>
+    </div>
+  `).join('') || '<div class="empty">아직 캡처한 내용이 없습니다</div>'
+}
+
+// ── 메모리 목록 ──────────────────────────────────────────
+async function loadMemories() {
+  if (_allMems.length) { renderMemories(_allMems); return }
+  const { memories } = await API('/member/memories')
+  _allMems = memories
+  renderMemories(_allMems)
+}
+
+function filterMemories() {
+  const q = document.getElementById('search-input').value.toLowerCase()
+  const filtered = _allMems.filter(m =>
+    m.description.toLowerCase().includes(q) ||
+    m.content.toLowerCase().includes(q) ||
+    (m.tags || []).some(t => t.toLowerCase().includes(q))
+  )
+  renderMemories(filtered)
+}
+
+function renderMemories(mems) {
+  const grid = document.getElementById('memories-grid')
+  if (!mems.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">메모리 없음</div>'
+    return
+  }
+  grid.innerHTML = mems.sort((a,b) => new Date(b.created_at)-new Date(a.created_at)).map(m => `
+    <div class="memory-card">
+      <div class="memory-card-top">
+        <span class="mem-type ${m.type}">${m.type}</span>
+        <span class="mem-conf">${Math.round(m.confidence*100)}%</span>
+      </div>
+      <div class="mem-desc">${m.description}</div>
+      <div class="mem-content">${m.content}</div>
+      <div class="mem-tags">${(m.tags||[]).map(t=>`<span class="mem-tag">${t}</span>`).join('')}</div>
+      <div class="mem-time">${m.platform||'unknown'} · ${timeAgo(m.created_at)}</div>
+    </div>
+  `).join('')
+}
+
+// ── 팀 현황 ──────────────────────────────────────────────
+async function loadTeamDomain() {
+  const { groups, total } = await API('/member/team-domain')
+  const colors = ['#60a5fa','#4ade80','#a78bfa','#fbbf24','#f87171','#fb923c','#34d399','#f472b6']
+
+  // 태그 분포 바
+  const tagEl = document.getElementById('team-tag-list')
+  const maxCount = Math.max(...Object.values(groups).map(v => v.length), 1)
+  tagEl.innerHTML = Object.entries(groups)
+    .sort((a,b) => b[1].length - a[1].length)
+    .map(([tag, mems], i) => `
+      <div class="tag-row">
+        <div class="tag-name">${tag}</div>
+        <div class="tag-bar-wrap"><div class="tag-bar" style="width:${(mems.length/maxCount*100).toFixed(0)}%;background:${colors[i%colors.length]}"></div></div>
+        <div class="tag-count">${mems.length}</div>
+      </div>
+    `).join('') || '<div class="empty">태그 없음</div>'
+
+  // 태그별 메모리 목록 (접기/펼치기)
+  const domEl = document.getElementById('team-domain-groups')
+  domEl.innerHTML = Object.entries(groups)
+    .sort((a,b) => b[1].length - a[1].length)
+    .map(([tag, mems]) => `
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border)" onclick="this.nextElementSibling.classList.toggle('show')">
+          <span style="font-size:13px;font-weight:600">${tag} <span style="color:var(--muted);font-weight:400">(${mems.length}개)</span></span>
+          <span style="color:var(--muted);font-size:12px">▾</span>
+        </div>
+        <div class="report-full">
+          ${mems.map(m => `
+            <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+              <div style="font-size:13px;font-weight:500;margin-bottom:2px">${m.description}</div>
+              <div style="font-size:11px;color:var(--muted)">${m.type} · 신뢰도 ${Math.round(m.confidence*100)}%</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('') || '<div class="empty">도메인 지식 없음</div>'
+}
+
+// ── 리포트 ───────────────────────────────────────────────
+async function loadReports() {
+  const { reports } = await API('/member/reports?limit=10')
+  const el = document.getElementById('reports-list')
+  el.innerHTML = reports.map(r => `
+    <div class="report-item">
+      <div class="report-header">
+        <span class="report-type ${r.type}">${r.type === 'weekly' ? '위클리' : '데일리'}</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="report-period">${r.period} · 신규 ${r.new_count}개</span>
+          <button class="report-toggle" onclick="toggleReport(this)">펼치기</button>
+        </div>
+      </div>
+      <div class="report-preview">${r.content.replace(/[#*`]/g,'').slice(0,120)}...</div>
+      <div class="report-full">${r.content.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    </div>
+  `).join('') || '<div class="empty">리포트 없음</div>'
+}
+
+function toggleReport(btn) {
+  const full = btn.closest('.report-item').querySelector('.report-full')
+  const preview = btn.closest('.report-item').querySelector('.report-preview')
+  const showing = full.classList.contains('show')
+  full.classList.toggle('show')
+  preview.style.display = showing ? 'block' : 'none'
+  btn.textContent = showing ? '펼치기' : '접기'
+}
+
+async function generateWeekly() {
+  const btn = document.getElementById('btn-gen-weekly')
+  const resultEl = document.getElementById('weekly-result')
+  const contentEl = document.getElementById('weekly-content')
+  const periodEl = document.getElementById('weekly-period')
+
+  btn.disabled = true
+  btn.textContent = '생성 중...'
+  resultEl.style.display = 'none'
+
+  try {
+    const res = await API('/member/report/weekly', 'POST')
+    periodEl.textContent = `📅 ${res.period} · 지식 ${res.count}개 기반`
+    contentEl.textContent = res.content
+    resultEl.style.display = 'block'
+    resultEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  } catch (e) {
+    alert('위클리 생성 실패: ' + e.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = '위클리 작성하기'
+  }
+}
+
+function copyWeekly() {
+  const text = document.getElementById('weekly-content').textContent
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target
+    btn.textContent = '✅ 복사됨'
+    setTimeout(() => btn.textContent = '📋 클립보드 복사', 2000)
+  })
+}
+
+// ── 팀 지식 검색 ─────────────────────────────────────────
+let _knAllTags = [], _activeTag = ''
+
+async function loadKnowledge() {
+  const res = await API('/member/team-knowledge?limit=50').catch(() => ({ memories: [], all_tags: [] }))
+  _knAllTags = res.all_tags || []
+  renderKnTags(_knAllTags)
+  renderKnResults(res.memories)
+}
+
+function renderKnTags(tags) {
+  const el = document.getElementById('kn-tags')
+  el.innerHTML = ['전체', ...tags].map(t => `
+    <span onclick="filterKnTag('${t}')" style="
+      cursor:pointer;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;
+      background:${_activeTag===t||(!_activeTag&&t==='전체') ? 'var(--blue)' : 'var(--surface2)'};
+      color:${_activeTag===t||(!_activeTag&&t==='전체') ? '#fff' : 'var(--muted)'};
+      border:1px solid var(--border);">${t}</span>
+  `).join('')
+}
+
+function filterKnTag(tag) {
+  _activeTag = tag === '전체' ? '' : tag
+  searchKnowledge()
+}
+
+async function searchKnowledge() {
+  const q = document.getElementById('kn-search').value.trim()
+  const params = new URLSearchParams({ limit: 100 })
+  if (q) params.set('q', q)
+  if (_activeTag) params.set('tag', _activeTag)
+  const res = await API(`/member/team-knowledge?${params}`).catch(() => ({ memories: [], all_tags: _knAllTags }))
+  renderKnTags(res.all_tags || _knAllTags)
+  renderKnResults(res.memories)
+}
+
+function renderKnResults(mems) {
+  const countEl = document.getElementById('kn-count')
+  const el = document.getElementById('kn-results')
+  countEl.textContent = `${mems.length}개 지식`
+  if (!mems.length) { el.innerHTML = '<div class="empty">검색 결과 없음</div>'; return }
+  el.innerHTML = mems.map(m => `
+    <div class="memory-card" style="margin-bottom:10px;">
+      <div class="memory-card-top">
+        <span class="mem-type ${m.type}">${m.type}</span>
+        <span class="mem-conf" style="font-size:11px;color:var(--muted);">${m.captured_by || '?'}</span>
+      </div>
+      <div class="mem-desc">${m.description}</div>
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">
+        ${(m.tags||[]).map(t=>`<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:var(--muted);">${t}</span>`).join('')}
+      </div>
+    </div>
+  `).join('')
+}
+
+// ── 메모 직접 추가 ────────────────────────────────────────
+function toggleMemoForm() {
+  const f = document.getElementById('memo-form')
+  f.style.display = f.style.display === 'none' ? 'block' : 'none'
+  if (f.style.display === 'block') document.getElementById('memo-desc').focus()
+}
+
+async function submitMemo() {
+  const desc = document.getElementById('memo-desc').value.trim()
+  if (!desc) { alert('내용을 입력하세요'); return }
+  const tagsRaw = document.getElementById('memo-tags').value.trim()
+  const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : []
+  const type = document.getElementById('memo-type').value
+  try {
+    await API('/member/memo', 'POST', { description: desc, tags, mem_type: type })
+    document.getElementById('memo-desc').value = ''
+    document.getElementById('memo-tags').value = ''
+    toggleMemoForm()
+    _knAllTags = []
+    await loadKnowledge()
+  } catch (e) {
+    alert('저장 실패: ' + e.message)
+  }
+}
+
+// ── 유틸 ─────────────────────────────────────────────────
+function timeAgo(iso) {
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
+  if (diff < 60) return `${diff}초 전`
+  if (diff < 3600) return `${Math.floor(diff/60)}분 전`
+  if (diff < 86400) return `${Math.floor(diff/3600)}시간 전`
+  return `${Math.floor(diff/86400)}일 전`
+}
+
+init()
+</script>
+</body>
+</html>
