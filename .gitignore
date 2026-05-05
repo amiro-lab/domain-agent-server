@@ -1,1 +1,8 @@
 .env
+.venv/
+__pycache__/
+*.pyc
+*.bak
+*.egg-info/
+domain_agent.db
+*.db-journal

@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from server.db import Memory
+
+
+def _iso_utc(dt: datetime | None) -> str:
+    """SQLite는 timezone을 보존하지 않아 naive로 읽힘. UTC로 명시해 ISO 직렬화."""
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 
 def _desc_hash(description: str) -> str:
@@ -96,6 +105,6 @@ def to_dict(mem: Memory) -> dict:
         "tags": json.loads(mem.tags) if mem.tags else [],
         "platform": mem.source_platform,
         "captured_by": mem.captured_by or "",
-        "created_at": mem.created_at.isoformat(),
-        "updated_at": mem.updated_at.isoformat(),
+        "created_at": _iso_utc(mem.created_at),
+        "updated_at": _iso_utc(mem.updated_at),
     }

@@ -33,6 +33,11 @@ SYSTEM = """\
 태그 허용 네임스페이스: team:, system:, person:, domain:, tech:, source:
 소문자+하이픈만, 항목당 최대 4개.
 
+**태그 우선 사용 강제**: 아래 "이미 사용 중인 태그"에서 의미가 가장 가까운 것을 먼저 선택하라.
+새 태그는 목록 어디에도 의미가 맞지 않을 때만 만든다. 동의어·표기 변형 금지 — `domain:billing` 이미 있으면 `domain:billings` / `project:billing` / `team:billing-pay` 같은 변형을 새로 만들지 말 것. 같은 주제는 같은 태그로.
+
+이미 사용 중인 태그 (top-30 빈도순 — 우선 선택): {tag_summary}
+
 오늘 날짜: {today}
 """
 
@@ -57,7 +62,10 @@ def _analyze_anthropic(text: str, platform: str, ctx: dict | None = None) -> lis
         return []
     client = anthropic.Anthropic(api_key=api_key)
     model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-    system = SYSTEM.format(today=date.today().isoformat())
+    system = SYSTEM.format(
+        today=date.today().isoformat(),
+        tag_summary=(ctx or {}).get("tag_summary") or "(없음 — 자유 생성 가능)",
+    )
     user_msg = f"다음 {platform} 대화에서 도메인 지식을 추출하라.\n\n---\n{text[:50000]}\n---"
     try:
         msg = client.messages.create(
@@ -86,7 +94,10 @@ def _analyze_openai(text: str, platform: str, ctx: dict | None = None) -> list[d
         return []
     client = openai.OpenAI(api_key=api_key)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    system = SYSTEM.format(today=date.today().isoformat())
+    system = SYSTEM.format(
+        today=date.today().isoformat(),
+        tag_summary=(ctx or {}).get("tag_summary") or "(없음 — 자유 생성 가능)",
+    )
     user_msg = f"다음 {platform} 대화에서 도메인 지식을 추출하라.\n\n---\n{text[:50000]}\n---"
     try:
         resp = client.chat.completions.create(

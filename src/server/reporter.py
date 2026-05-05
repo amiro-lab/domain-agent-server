@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from server.db import Memory, Report, Team, WeeklySchedule, engine
+from server.db import DomainSummary, Memory, Report, Team, WeeklySchedule, engine
 
 DAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -87,6 +87,27 @@ def _llm_summarize(prompt: str, operation: str = "report", ctx: dict | None = No
 
 # ── 도메인 요약 ───────────────────────────────────────────
 
+_TYPE_RANK = {"ontology": 0, "preference": 1, "fact": 2}
+
+
+def _representative_sort_key(m: Memory):
+    """도메인을 가장 잘 설명하는 메모리가 앞에 오도록 정렬.
+
+    우선순위: ontology > preference > fact → source:declared 태그 → confidence 높음 → 최근 업데이트.
+    """
+    try:
+        tag_list = json.loads(m.tags or "[]")
+    except Exception:
+        tag_list = []
+    is_declared = "source:declared" in tag_list
+    return (
+        _TYPE_RANK.get(m.mem_type, 99),
+        0 if is_declared else 1,
+        -float(m.confidence or 0),
+        -(m.updated_at.timestamp() if m.updated_at else 0),
+    )
+
+
 def domain_summary_from_memories(memories: list[Memory]) -> dict:
     groups = _group_by_tag(memories)
     result = {}
@@ -94,7 +115,7 @@ def domain_summary_from_memories(memories: list[Memory]) -> dict:
         result[tag] = [
             {"id": m.id, "type": m.mem_type, "description": m.description,
              "confidence": m.confidence, "platform": m.source_platform}
-            for m in sorted(mems, key=lambda x: -x.confidence)
+            for m in sorted(mems, key=_representative_sort_key)
         ]
     return {"total": len(memories), "groups": result}
 
@@ -102,6 +123,98 @@ def domain_summary_from_memories(memories: list[Memory]) -> dict:
 def domain_summary(session: Session, team_id: str) -> dict:
     memories = _all_memories(session, team_id)
     return domain_summary_from_memories(memories)
+
+
+# ── 도메인 한 줄 설명 (LLM 캐시) ──────────────────────────
+
+def get_cached_domain_summaries(session: Session, team_id: str) -> dict[str, dict]:
+    """팀의 캐시된 도메인 한 줄 설명. {tag: {summary, memory_count, updated_at}}."""
+    rows = session.query(DomainSummary).filter_by(team_id=team_id).all()
+    return {
+        r.tag: {
+            "summary": r.summary,
+            "memory_count": r.memory_count,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    }
+
+
+def rebuild_domain_summaries(
+    session: Session, team_id: str, top_n: int = 30, min_count: int = 1,
+) -> dict:
+    """팀의 도메인 태그 상위 top_n개에 대해 LLM이 한 줄 설명 생성·캐시.
+
+    각 도메인의 대표 메모리(_representative_sort_key 우선)들을 보고 '이 도메인은 X' 형태로 1문장 작성.
+    """
+    memories = _all_memories(session, team_id)
+    groups = _group_by_tag(memories)
+
+    targets = sorted(
+        [(tag, mems) for tag, mems in groups.items() if len(mems) >= min_count],
+        key=lambda x: -len(x[1]),
+    )[:top_n]
+
+    if not targets:
+        return {"updated": 0, "skipped": 0}
+
+    blocks = []
+    for tag, mems in targets:
+        repr_mems = sorted(mems, key=_representative_sort_key)[:6]
+        descs = "\n".join(f"- [{m.mem_type}] {m.description}" for m in repr_mems)
+        blocks.append(f"## `{tag}` ({len(mems)}개 메모리)\n{descs}")
+    prompt_body = "\n\n".join(blocks)
+
+    prompt = (
+        "각 도메인 태그가 무엇에 관한 도메인인지 한 줄로 설명해줘.\n"
+        "형식: 각 줄에 정확히 한 태그씩, `{태그}: {한 줄 설명}` 형태로.\n"
+        "한 줄 설명은 자연스러운 한국어로, '이 도메인은/이 프로젝트는 X를 하는 ...' 같이 도메인의 본질·목적·주제가 드러나도록.\n"
+        "예시:\n"
+        "- `domain:domain-agent`: 사용자의 도메인을 기억하고 이해하는 AI 에이전트를 만드는 프로젝트\n"
+        "- `system:codesign`: macOS 앱 코드 서명·재서명 관련 작업 도메인\n"
+        "주의: 단일 메모리를 그대로 인용하지 말고 여러 메모리를 종합해 도메인의 의미를 한 줄로 압축. AI 평가·감상('인상적', '~로 보입니다')·사담 금지.\n"
+        f"마크다운 글머리표 없이, 한 줄당 정확히 `태그: 설명` 형식만.\n\n"
+        "---\n\n"
+        f"{prompt_body}"
+    )
+    team = session.query(Team).filter_by(id=team_id).first()
+    ctx = {"team_id": team_id, "team_name": team.name if team else ""}
+    raw = _llm_summarize(prompt, "domain_describe", ctx)
+
+    import re
+    target_tags = {tag for tag, _ in targets}
+    parsed: dict[str, str] = {}
+    pattern = re.compile(r"^\s*[-*]?\s*`([^`]+)`\s*[:：]\s*(.+?)\s*$")
+    for line in raw.splitlines():
+        m = pattern.match(line)
+        if m:
+            tag, body = m.group(1).strip(), m.group(2).strip()
+            if tag and body:
+                parsed[tag] = body
+            continue
+        line_clean = line.strip().lstrip("-*•").strip()
+        for tag in target_tags:
+            if line_clean.startswith(tag + ":") or line_clean.startswith(tag + " :") or line_clean.startswith(tag + "："):
+                body = line_clean[len(tag):].lstrip(":：").strip()
+                if body:
+                    parsed[tag] = body
+                break
+
+    updated = 0
+    for tag, mems in targets:
+        summary = parsed.get(tag)
+        if not summary:
+            continue
+        row = session.query(DomainSummary).filter_by(team_id=team_id, tag=tag).first()
+        if row:
+            row.summary = summary
+            row.memory_count = len(mems)
+        else:
+            session.add(DomainSummary(team_id=team_id, tag=tag, summary=summary, memory_count=len(mems)))
+        updated += 1
+    session.commit()
+
+    return {"updated": updated, "skipped": len(targets) - updated, "total_targets": len(targets)}
 
 
 # ── 데일리 리포트 ─────────────────────────────────────────
@@ -170,13 +283,27 @@ def generate_weekly(session: Session, team_id: str, week_label: str | None = Non
     team = session.query(Team).filter_by(id=team_id).first()
     ctx = {"team_id": team_id, "team_name": team.name if team else ""}
 
-    domain_lines = [f"- {tag}: {len(mems)}개" for tag, mems in list(groups.items())[:10]]
+    domain_lines = []
+    for tag, mems in list(groups.items())[:10]:
+        sorted_mems = sorted(mems, key=lambda m: m.confidence, reverse=True)[:3]
+        samples = "\n".join(f"    · {m.description}" for m in sorted_mems)
+        domain_lines.append(f"- {tag}: {len(mems)}개\n{samples}")
     new_lines = "\n".join(f"- [{m.mem_type}] {m.description}" for m in new_mems) or "없음"
     prompt = (
         f"팀 위클리 도메인 리포트({period})를 작성해줘. 마크다운 사용.\n\n"
         f"## 이번 주 새로 학습된 지식 ({len(new_mems)}개)\n{new_lines}\n\n"
         f"## 현재 팀 도메인 지식 현황 (총 {len(all_mems)}개)\n" + "\n".join(domain_lines) + "\n\n"
-        "위 내용을 바탕으로 팀의 이번 주 도메인 학습 현황, 주요 인사이트, 다음 주 주목할 점을 정리해줘."
+        "위 내용을 바탕으로 다음 5개 섹션으로 정리해줘:\n"
+        "1) 이번 주 주요 업무 내용 — 실제 반영·완료·적용된 작업 위주 (배포·머지·구현 완료·문서 확정·결정 채택 등). 단순 논의·아이디어·검토 단계는 제외하고, 산출물이 실제로 적용된 항목만 작성.\n"
+        "2) 이번 주 주요 학습 내용 (새로 알게 된 사실·개념·도메인 지식)\n"
+        "3) 주요 인사이트\n"
+        "4) 다음 주 주목할 점\n"
+        "5) 도메인 한 줄 요약 — 위 '현재 팀 도메인 지식 현황'에 나온 각 도메인 태그가 무엇에 관한 것인지 그 태그 아래 대표 항목을 보고 한 줄로 설명. 형식: `- \\`{tag}\\`: {한 줄 요약} ({N}개)`.\n"
+        "업무 내용과 학습 내용은 반드시 별도 섹션으로 분리할 것 (합치지 마라).\n"
+        "주의: 위에 나열된 메모리 내용에서 직접 도출되는 사실만 적어라. "
+        "AI의 주관적 평가·감상·권고("
+        "'~로 보입니다', '인상적입니다', '다행히', '바람직합니다', '~하는 것이 좋겠습니다' 등)는 절대 넣지 마라. "
+        "각 섹션은 메모리에 등장한 항목을 그대로 인용하거나 요약하는 식으로만 작성."
     )
     content = _llm_summarize(prompt, "report_weekly", ctx)
 
@@ -213,14 +340,28 @@ def generate_member_weekly(session: Session, team_id: str, member_name: str) -> 
 
     groups = _group_by_tag(mems)
     mem_lines = "\n".join(f"- [{m.mem_type}] {m.description}" for m in mems)
-    domain_lines = "\n".join(f"- {tag}: {len(items)}개" for tag, items in groups.items())
+    domain_blocks = []
+    for tag, items in groups.items():
+        sorted_items = sorted(items, key=lambda m: m.confidence, reverse=True)[:3]
+        samples = "\n".join(f"    · {m.description}" for m in sorted_items)
+        domain_blocks.append(f"- {tag}: {len(items)}개\n{samples}")
+    domain_lines = "\n".join(domain_blocks)
 
     prompt = (
         f"{member_name}의 지난 7일({period}) 업무 도메인 위클리를 작성해줘. 마크다운 사용.\n\n"
         f"## 수집된 지식 ({len(mems)}개)\n{mem_lines}\n\n"
         f"## 도메인 분포\n{domain_lines}\n\n"
-        "위 내용을 바탕으로 이번 주 주요 업무·학습 내용, 핵심 인사이트, 다음 주 이어갈 것들을 자연스럽게 정리해줘. "
-        "개인 위클리 회고 느낌으로 작성."
+        "위 내용을 바탕으로 다음 5개 섹션으로 정리해줘:\n"
+        "1) 이번 주 주요 업무 내용 — 실제 반영·완료·적용된 작업 위주 (배포·머지·구현 완료·문서 확정·결정 채택 등). 단순 논의·아이디어·검토 단계는 제외하고, 산출물이 실제로 적용된 항목만 작성.\n"
+        "2) 이번 주 주요 학습 내용 (새로 알게 된 사실·개념·도메인 지식)\n"
+        "3) 핵심 인사이트\n"
+        "4) 다음 주 이어갈 것들\n"
+        "5) 도메인 한 줄 요약 — 위 '도메인 분포'에 나온 각 도메인 태그가 무엇에 관한 것인지 그 태그 아래 대표 항목을 보고 한 줄로 설명. 형식: `- \\`{tag}\\`: {한 줄 요약} ({N}개)`.\n"
+        "업무 내용과 학습 내용은 반드시 별도 섹션으로 분리할 것 (합치지 마라).\n"
+        "주의: 위에 나열된 메모리 내용에서 직접 도출되는 사실만 적어라. "
+        "AI의 주관적 평가·감상·권고("
+        "'~로 보입니다', '인상적입니다', '다행히', '바람직합니다', '~하는 것이 좋겠습니다', '훌륭한 한 주였습니다' 등)는 절대 넣지 마라. "
+        "각 섹션은 메모리에 등장한 항목을 그대로 인용하거나 요약하는 식으로만 작성."
     )
     ctx = {"team_id": team_id, "member_name": member_name}
     content = _llm_summarize(prompt, "report_weekly", ctx)

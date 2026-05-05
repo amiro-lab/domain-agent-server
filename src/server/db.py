@@ -11,12 +11,15 @@ from sqlalchemy import (
     UniqueConstraint, create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
+from sqlalchemy.pool import NullPool
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./domain_agent.db")
 
+_is_sqlite = DATABASE_URL.startswith("sqlite")
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    poolclass=NullPool if _is_sqlite else None,
 )
 
 
@@ -156,6 +159,18 @@ class TokenUsage(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DomainSummary(Base):
+    __tablename__ = "domain_summaries"
+    __table_args__ = (UniqueConstraint("team_id", "tag"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    team_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    tag: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    memory_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class AuditLog(Base):

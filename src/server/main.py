@@ -35,6 +35,15 @@ DASHBOARD_HTML = Path(__file__).parent / "templates" / "dashboard.html"
 ADMIN_HTML = Path(__file__).parent / "templates" / "admin.html"
 MEMBER_HTML = Path(__file__).parent / "templates" / "member.html"
 
+
+def _iso_utc(dt):
+    """SQLite는 timezone을 보존하지 않아 naive로 읽힘. UTC 명시해 ISO 직렬화."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
 app = FastAPI(title="domain-agent server", version="0.2.0")
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
 
@@ -256,7 +265,7 @@ def get_provider(
         "anthropic_model": s.anthropic_model,
         "openai_key_set": bool(s.openai_api_key),
         "anthropic_key_set": bool(s.anthropic_api_key),
-        "updated_at": s.updated_at.isoformat(),
+        "updated_at": _iso_utc(s.updated_at),
     }
 
 
@@ -311,7 +320,7 @@ def admin_list_teams(
             "memory_limit": t.memory_limit,
             "enabled": t.enabled,
             "member_count": member_count,
-            "created_at": t.created_at.isoformat(),
+            "created_at": _iso_utc(t.created_at),
         })
     return {"teams": result}
 
@@ -369,10 +378,10 @@ def admin_list_members(
             "name": m.name,
             "email": m.email,
             "enabled": m.enabled,
-            "last_active": m.last_active.isoformat() if m.last_active else None,
+            "last_active": _iso_utc(m.last_active),
             "api_key_enabled": api_key.enabled if api_key else False,
-            "api_key_last_used": api_key.last_used_at.isoformat() if api_key and api_key.last_used_at else None,
-            "created_at": m.created_at.isoformat(),
+            "api_key_last_used": _iso_utc(api_key.last_used_at),
+            "created_at": _iso_utc(m.created_at),
         })
     return {"members": result}
 
@@ -430,8 +439,8 @@ def admin_list_apikeys(
             "team_name": k.team.name if k.team else "",
             "label": k.label,
             "enabled": k.enabled,
-            "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
-            "created_at": k.created_at.isoformat(),
+            "last_used_at": _iso_utc(k.last_used_at),
+            "created_at": _iso_utc(k.created_at),
         }
         for k in keys
     ]}
@@ -549,7 +558,7 @@ def admin_audit(
             "endpoint": l.endpoint,
             "status_code": l.status_code,
             "ip_address": l.ip_address,
-            "created_at": l.created_at.isoformat(),
+            "created_at": _iso_utc(l.created_at),
         }
         for l in logs
     ]}
@@ -657,7 +666,27 @@ def create_team(name: str, join_code: str = "", session: Session = Depends(get_s
 
 # ── 캡처 ─────────────────────────────────────────────────
 
-def _process_capture(team_id: str, team_name: str, req: CaptureRequest):
+def _collect_tag_top_n(session: Session, team_id: str, n: int = 30) -> str:
+    """팀의 기존 메모리에서 태그 top-N 빈도를 한 줄 요약. analyzer 프롬프트에 주입."""
+    from collections import Counter
+    mems = memory_store.list_all(session, team_id)
+    counter: Counter = Counter()
+    for m in mems:
+        try:
+            tags = json.loads(m.tags or "[]")
+        except Exception:
+            tags = []
+        for t in tags:
+            if not isinstance(t, str) or t.startswith("source:") or ":" not in t:
+                continue
+            counter[t] += 1
+    top = counter.most_common(n)
+    if not top:
+        return "(아직 사용 중인 태그 없음)"
+    return ", ".join(f"`{t}`({c})" for t, c in top)
+
+
+def _process_capture(team_id: str, team_name: str, req: CaptureRequest, fallback_member: str = ""):
     if req.transcript:
         text = req.transcript
     elif req.messages:
@@ -666,7 +695,11 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest):
     else:
         return
 
-    ctx = {"team_id": team_id, "team_name": team_name, "member_name": req.member or ""}
+    member_name = req.member or fallback_member or ""
+    ctx = {"team_id": team_id, "team_name": team_name, "member_name": member_name}
+    # 신규 태그 생성 억제: 기존 태그 top-30 빈도순을 ctx에 담아 analyzer 프롬프트에 주입
+    with Session(engine) as _s:
+        ctx["tag_summary"] = _collect_tag_top_n(_s, team_id, n=30)
     items = analyzer.analyze(text, platform=req.platform, ctx=ctx)
     with Session(engine) as session:
         for item in items:
@@ -677,7 +710,7 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest):
                     float(item.get("confidence", 0.7)),
                     list(item.get("tags") or []),
                     platform=req.platform,
-                    captured_by=req.member or "",
+                    captured_by=member_name,
                 )
             except Exception:
                 pass
@@ -688,8 +721,11 @@ def capture(
     req: CaptureRequest,
     background_tasks: BackgroundTasks,
     team: Team = Depends(get_team),
+    api_key: APIKey = Depends(get_api_key),
 ):
-    background_tasks.add_task(_process_capture, team.id, team.name, req)
+    background_tasks.add_task(
+        _process_capture, team.id, team.name, req, api_key.label or "",
+    )
     return {"status": "queued", "platform": req.platform}
 
 
@@ -767,6 +803,125 @@ def get_member_domain(
     }
 
 
+# ── 온톨로지 그래프 (멤버 인증) ──────────────────────────
+
+@app.delete("/member/domain")
+def member_delete_domain(
+    tag: str = Query(..., min_length=1),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """팀 메모리에서 해당 태그가 붙은 모든 메모리를 삭제 + 도메인 요약 캐시도 정리.
+
+    이 작업은 팀 전체에 영향. 같은 태그가 다른 멤버들의 메모리에도 붙어 있으면 같이 사라진다.
+    """
+    from server.db import DomainSummary, Memory
+    all_mems = memory_store.list_all(session, ctx.team.id)
+    targets = []
+    for m in all_mems:
+        try:
+            tag_list = json.loads(m.tags or "[]")
+        except Exception:
+            tag_list = []
+        if tag in tag_list:
+            targets.append(m)
+
+    deleted_count = len(targets)
+    for m in targets:
+        session.delete(m)
+
+    summary_row = session.query(DomainSummary).filter_by(team_id=ctx.team.id, tag=tag).first()
+    if summary_row:
+        session.delete(summary_row)
+    session.commit()
+
+    return {"ok": True, "tag": tag, "deleted_memories": deleted_count}
+
+
+@app.get("/member/domain/summaries")
+def member_domain_summaries(
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """팀의 캐시된 도메인 한 줄 설명."""
+    return {"summaries": reporter.get_cached_domain_summaries(session, ctx.team.id)}
+
+
+@app.post("/member/domain/summaries/rebuild")
+def member_domain_summaries_rebuild(
+    top_n: int = Query(default=30, ge=1, le=100),
+    min_count: int = Query(default=1, ge=1, le=20),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """LLM이 도메인 태그별 한 줄 설명을 생성·캐시."""
+    result = reporter.rebuild_domain_summaries(session, ctx.team.id, top_n=top_n, min_count=min_count)
+    return result
+
+
+@app.get("/member/ontology/graph")
+def member_ontology_graph(
+    min_shared: int = Query(default=1, ge=1, le=10),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """멤버 인증으로 팀의 온톨로지 그래프 조회."""
+    mems = memory_store.list_all(session, ctx.team.id, mem_type="ontology")
+    return _build_ontology_graph(mems, min_shared)
+
+
+def _build_ontology_graph(mems, min_shared: int) -> dict:
+    nodes = []
+    tag_sets: list[set[str]] = []
+    for m in mems:
+        try:
+            raw_tags = json.loads(m.tags or "[]")
+        except Exception:
+            raw_tags = []
+        meaningful = {t for t in raw_tags if not t.startswith("source:")}
+        tag_sets.append(meaningful)
+
+        primary = next(
+            (t for t in raw_tags if t.startswith("domain:") or t.startswith("project:")),
+            (raw_tags[0] if raw_tags else "general"),
+        )
+        nodes.append({
+            "id": m.id,
+            "label": (m.description or m.id)[:40],
+            "description": m.description,
+            "content": m.content,
+            "tags": raw_tags,
+            "group": primary,
+            "confidence": m.confidence,
+            "captured_by": m.captured_by or "",
+        })
+
+    edges = []
+    for i in range(len(mems)):
+        ti = tag_sets[i]
+        if not ti:
+            continue
+        for j in range(i + 1, len(mems)):
+            shared = ti & tag_sets[j]
+            if len(shared) >= min_shared:
+                edges.append({
+                    "source": mems[i].id,
+                    "target": mems[j].id,
+                    "weight": len(shared),
+                    "shared": sorted(shared),
+                })
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "stats": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "min_shared": min_shared,
+        },
+    }
+
+
 # ── 컨텍스트 ─────────────────────────────────────────────
 
 @app.get("/api/context")
@@ -799,12 +954,14 @@ def get_context_brief(
 def save_memory(
     req: MemoryRequest,
     team: Team = Depends(get_team),
+    api_key: APIKey = Depends(get_api_key),
     session: Session = Depends(get_session),
 ):
     mem = memory_store.save(
         session, team.id,
         req.type, req.description, req.content,
         req.confidence, req.tags,
+        captured_by=api_key.label or "",
     )
     return memory_store.to_dict(mem)
 
@@ -867,7 +1024,7 @@ def list_reports(
     reports = q.order_by(Report.created_at.desc()).limit(limit).all()
     return {"reports": [
         {"id": r.id, "type": r.report_type, "period": r.period,
-         "new_count": r.new_memory_count, "created_at": r.created_at.isoformat(),
+         "new_count": r.new_memory_count, "created_at": _iso_utc(r.created_at),
          "preview": r.content[:200] + "..." if len(r.content) > 200 else r.content}
         for r in reports
     ]}
@@ -994,8 +1151,8 @@ def member_me(ctx: MemberContext = Depends(get_member_ctx)):
         "email": ctx.member.email,
         "team_id": ctx.team.id,
         "team_name": ctx.team.name,
-        "last_active": ctx.member.last_active.isoformat() if ctx.member.last_active else None,
-        "created_at": ctx.member.created_at.isoformat(),
+        "last_active": _iso_utc(ctx.member.last_active),
+        "created_at": _iso_utc(ctx.member.created_at),
     }
 
 
@@ -1129,7 +1286,7 @@ def member_reports(
     )
     return {"reports": [
         {"id": r.id, "type": r.report_type, "period": r.period,
-         "new_count": r.new_memory_count, "created_at": r.created_at.isoformat(),
+         "new_count": r.new_memory_count, "created_at": _iso_utc(r.created_at),
          "content": r.content}
         for r in reports
     ]}

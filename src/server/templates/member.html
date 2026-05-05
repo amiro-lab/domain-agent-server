@@ -78,7 +78,14 @@ main { padding: 28px; max-width: 1200px; }
 
 /* ─── 메모리 카드 ─── */
 .memory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
-.memory-card {
+.memory-card { cursor: pointer; transition: transform .08s, box-shadow .08s; }
+.memory-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.mem-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 20px; }
+.mem-modal { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.mem-modal-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.mem-modal-body { padding: 16px 20px; overflow-y: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.mem-modal-close { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+.x-orig {
   background: var(--bg3); border: 1px solid var(--border); border-radius: 10px;
   padding: 14px 16px;
 }
@@ -179,6 +186,7 @@ main { padding: 28px; max-width: 1200px; }
     <div class="tab" onclick="goto('team', this)">팀 현황</div>
     <div class="tab" onclick="goto('knowledge', this)">팀 지식 검색</div>
     <div class="tab" onclick="goto('reports', this)">리포트</div>
+    <div class="tab" onclick="goto('graph', this)">온톨로지 그래프</div>
   </div>
 
   <main>
@@ -210,7 +218,22 @@ main { padding: 28px; max-width: 1200px; }
 
       <div class="row2">
         <div class="panel">
-          <div class="panel-title">내 태그별 도메인 지식</div>
+          <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+            <span>내 태그별 도메인 지식</span>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="filter-domain" checked onchange="loadMyDomain()"> domain</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="filter-team" onchange="loadMyDomain()"> team</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="filter-system" onchange="loadMyDomain()"> system</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="filter-other" onchange="loadMyDomain()"> 기타</label>
+              </div>
+              <button id="btn-rebuild-summaries" onclick="rebuildDomainSummaries()" style="
+                background:var(--purple);color:#fff;border:none;border-radius:6px;
+                padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">
+                도메인 설명 갱신
+              </button>
+            </div>
+          </div>
           <div id="my-tag-list" class="loading">로딩 중...</div>
         </div>
         <div class="panel">
@@ -315,12 +338,42 @@ main { padding: 28px; max-width: 1200px; }
       </div>
     </div>
 
+    <!-- 온톨로지 그래프 -->
+    <div class="page" id="page-graph">
+      <div class="panel" style="padding:0;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);">
+          <div class="panel-title" style="margin:0;">온톨로지 연관 그래프</div>
+          <div style="display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);">
+            <span id="graph-stat-nodes" class="team-badge">노드 0</span>
+            <span id="graph-stat-edges" class="team-badge">엣지 0</span>
+            <label style="display:flex;align-items:center;gap:6px;">최소 공유 태그
+              <input type="number" id="graph-min-shared" value="1" min="1" max="10"
+                style="width:54px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);">
+            </label>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 320px;height:600px;">
+          <div id="graph-canvas" style="background:var(--bg);position:relative;width:100%;height:600px;">
+            <div id="graph-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;z-index:1;pointer-events:none;">로딩 중...</div>
+          </div>
+          <div id="graph-side" style="border-left:1px solid var(--border);padding:18px;overflow-y:auto;background:var(--bg2);height:600px;">
+            <div style="color:var(--muted);font-size:12px;line-height:1.6;">노드 클릭 시 본문/태그/연결된 온톨로지가 여기에 표시됩니다.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 
 <script>
 let TOKEN = localStorage.getItem('member_token') || ''
 let ME = JSON.parse(localStorage.getItem('member_me') || 'null')
+function escapeHtml(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+}
 let _allMems = []
 
 const API = (path, method = 'GET', body = null) => {
@@ -409,16 +462,174 @@ function goto(page, el) {
   if (page === 'team') loadTeamDomain()
   if (page === 'knowledge') loadKnowledge()
   if (page === 'reports') loadReports()
+  if (page === 'graph') loadOntologyGraph()
 }
+
+// ── 도메인 삭제 ──────────────────────────────────────────
+async function deleteDomainTag(tag, count) {
+  const ok = confirm(
+    `도메인 "${tag}" 삭제\n\n` +
+    `이 태그가 붙은 팀 메모리 ${count}개가 모두 삭제됩니다 (다른 멤버 기여분 포함).\n` +
+    `이 도메인의 한 줄 설명 캐시도 함께 정리됩니다.\n\n` +
+    `복구할 수 없습니다. 진행할까요?`
+  )
+  if (!ok) return
+  try {
+    const r = await API(`/member/domain?tag=${encodeURIComponent(tag)}`, 'DELETE')
+    alert(`삭제 완료: ${r.deleted_memories}개 메모리 제거됨`)
+    await loadMyDomain()
+  } catch (e) {
+    alert('삭제 실패: ' + (e.message || e))
+  }
+}
+
+// ── 도메인 요약 갱신 ─────────────────────────────────────
+async function rebuildDomainSummaries() {
+  const btn = document.getElementById('btn-rebuild-summaries')
+  if (!btn) return
+  const orig = btn.textContent
+  btn.disabled = true
+  btn.textContent = '생성 중…'
+  try {
+    const r = await API('/member/domain/summaries/rebuild?top_n=30&min_count=1', 'POST')
+    btn.textContent = `${r.updated}개 갱신`
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false }, 1800)
+    await loadMyDomain()
+  } catch (e) {
+    btn.textContent = '실패'
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false }, 1800)
+  }
+}
+
+// ── 온톨로지 그래프 ──────────────────────────────────────
+let _graphNet = null
+let _graphData = { nodes: [], edges: [] }
+const _graphColors = ['#60a5fa','#4ade80','#a78bfa','#fbbf24','#f87171','#22d3ee','#fb923c','#34d399','#c084fc','#f472b6']
+const _graphColorMap = {}
+function _graphColorFor(group) {
+  if (!_graphColorMap[group]) {
+    _graphColorMap[group] = _graphColors[Object.keys(_graphColorMap).length % _graphColors.length]
+  }
+  return _graphColorMap[group]
+}
+function _graphEsc(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+}
+async function loadOntologyGraph() {
+  const minShared = document.getElementById('graph-min-shared').value || 1
+  const empty = document.getElementById('graph-empty')
+  empty.style.display = 'flex'
+  empty.textContent = '로딩 중...'
+  const data = await API(`/member/ontology/graph?min_shared=${minShared}`)
+  _graphData = data
+  document.getElementById('graph-stat-nodes').textContent = `노드 ${data.stats.node_count}`
+  document.getElementById('graph-stat-edges').textContent = `엣지 ${data.stats.edge_count}`
+  if (!data.nodes.length) {
+    empty.textContent = '저장된 ontology 메모리가 없습니다'
+    return
+  }
+  empty.style.display = 'none'
+  const nodes = data.nodes.map(n => ({
+    id: n.id,
+    label: n.label,
+    title: n.description,
+    color: { background: _graphColorFor(n.group), border: '#1a1d27', highlight: { background: _graphColorFor(n.group), border: '#fff' } },
+    font: { color: '#e2e8f0', size: 12, face: 'system-ui' },
+    shape: 'dot',
+    size: 12 + Math.min(8, (n.tags?.length || 0)),
+  }))
+  const edges = data.edges.map((e, i) => ({
+    id: 'e' + i,
+    from: e.source,
+    to: e.target,
+    width: Math.min(1 + e.weight * 0.6, 5),
+    color: { color: '#2e3347', highlight: '#60a5fa' },
+    title: '공유 태그: ' + e.shared.join(', '),
+    smooth: false,
+  }))
+  const container = document.getElementById('graph-canvas')
+  if (_graphNet) { try { _graphNet.destroy() } catch(e) {} _graphNet = null }
+  // vis 영역만 비우고 graph-empty(이미 hidden)는 유지
+  container.querySelectorAll('.vis-network').forEach(el => el.remove())
+  _graphNet = new vis.Network(container, { nodes, edges }, {
+    autoResize: true,
+    height: '600px',
+    width: '100%',
+    physics: { enabled: true, barnesHut: { gravitationalConstant: -4000, springLength: 120, springConstant: 0.04, damping: 0.4 }, stabilization: { iterations: 200 } },
+    interaction: { hover: true, tooltipDelay: 200 },
+  })
+  _graphNet.once('stabilizationIterationsDone', () => _graphNet.fit())
+  _graphNet.on('click', (p) => {
+    if (p.nodes.length) _graphShowNode(p.nodes[0])
+    else if (p.edges.length) _graphShowEdge(p.edges[0])
+  })
+}
+function _graphShowNode(nodeId) {
+  const n = _graphData.nodes.find(x => x.id === nodeId)
+  if (!n) return
+  const neighborEdges = _graphData.edges.filter(e => e.source === nodeId || e.target === nodeId)
+  const neighborItems = neighborEdges.map(e => {
+    const otherId = e.source === nodeId ? e.target : e.source
+    const other = _graphData.nodes.find(x => x.id === otherId)
+    if (!other) return ''
+    return `<div class="g-neighbor" data-id="${_graphEsc(other.id)}" style="padding:8px 10px;border-radius:6px;cursor:pointer;background:var(--bg3);border:1px solid var(--border);margin-bottom:6px;font-size:12px;line-height:1.4;">
+      ${_graphEsc(other.description || other.label)}
+      <div style="font-size:10px;color:var(--muted);margin-top:2px;">공유 태그 ${e.weight}: ${_graphEsc(e.shared.join(', '))}</div>
+    </div>`
+  }).join('')
+  document.getElementById('graph-side').innerHTML = `
+    <div class="panel-title" style="margin-bottom:10px;">온톨로지</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:10px;line-height:1.4;">${_graphEsc(n.description)}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;margin-bottom:12px;">
+      <span class="mem-type ontology">ontology</span>
+      <span style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:8px;">conf ${(n.confidence ?? 0).toFixed?.(2)}</span>
+      ${n.captured_by ? `<span style="background:#60a5fa22;color:var(--blue);padding:2px 8px;border-radius:8px;">${_graphEsc(n.captured_by)}</span>` : ''}
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;margin-bottom:12px;">${_graphEsc(n.content)}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;">${n.tags.map(t => `<span class="mem-tag">${_graphEsc(t)}</span>`).join('')}</div>
+    ${neighborEdges.length ? `<div class="panel-title" style="margin-top:6px;">연결된 온톨로지 (${neighborEdges.length})</div>${neighborItems}` : ''}
+  `
+  document.querySelectorAll('.g-neighbor').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.id
+      _graphNet.selectNodes([id])
+      _graphNet.focus(id, { scale: 1.2, animation: true })
+      _graphShowNode(id)
+    })
+  })
+}
+function _graphShowEdge(edgeId) {
+  const idx = parseInt(edgeId.slice(1), 10)
+  const e = _graphData.edges[idx]
+  if (!e) return
+  const a = _graphData.nodes.find(x => x.id === e.source)
+  const b = _graphData.nodes.find(x => x.id === e.target)
+  document.getElementById('graph-side').innerHTML = `
+    <div class="panel-title" style="margin-bottom:10px;">연결</div>
+    <div style="font-size:13px;line-height:1.5;margin-bottom:14px;">
+      <b style="color:var(--green);">${_graphEsc(a.description)}</b>
+      <span style="color:var(--muted);"> ↔ </span>
+      <b style="color:var(--green);">${_graphEsc(b.description)}</b>
+    </div>
+    <div class="panel-title">공유 태그 (${e.weight})</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;">${e.shared.map(t => `<span class="mem-tag">${_graphEsc(t)}</span>`).join('')}</div>
+  `
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('graph-min-shared')
+  if (inp) inp.addEventListener('change', loadOntologyGraph)
+})
 
 // ── 내 도메인 ────────────────────────────────────────────
 async function loadMyDomain() {
-  const [myDomain, teamDomain, members, myMems] = await Promise.all([
+  const [myDomain, teamDomain, members, myMems, summariesResp] = await Promise.all([
     API('/member/domain'),
     API('/member/team-domain'),
     API('/member/team-members'),
     API('/member/memories'),
+    API('/member/domain/summaries'),
   ])
+  const summaries = summariesResp.summaries || {}
 
   // 카드
   const myTotal = myDomain.total || 0
@@ -429,23 +640,49 @@ async function loadMyDomain() {
   document.getElementById('my-pct').textContent = pct + '%'
   document.getElementById('my-tags').textContent = Object.keys(myDomain.groups || {}).length
 
-  // 내 태그 분포
+  // 내 태그 분포 (prefix 필터 적용)
   const tagEl = document.getElementById('my-tag-list')
-  const groups = myDomain.groups || {}
+  const allGroups = myDomain.groups || {}
+  const showDomain = document.getElementById('filter-domain')?.checked ?? true
+  const showTeam = document.getElementById('filter-team')?.checked ?? false
+  const showSystem = document.getElementById('filter-system')?.checked ?? false
+  const showOther = document.getElementById('filter-other')?.checked ?? false
+  const groups = Object.fromEntries(Object.entries(allGroups).filter(([tag]) => {
+    if (tag.startsWith('domain:')) return showDomain
+    if (tag.startsWith('team:')) return showTeam
+    if (tag.startsWith('system:')) return showSystem
+    return showOther
+  }))
   const maxCount = Math.max(...Object.values(groups).map(v => v.length), 1)
   if (!Object.keys(groups).length) {
-    tagEl.innerHTML = '<div class="empty">아직 캡처된 도메인 지식이 없습니다</div>'
+    tagEl.innerHTML = '<div class="empty">선택한 필터에 해당하는 도메인이 없습니다</div>'
   } else {
     const colors = ['#60a5fa','#4ade80','#a78bfa','#fbbf24','#f87171','#fb923c']
     tagEl.innerHTML = Object.entries(groups)
       .sort((a, b) => b[1].length - a[1].length)
-      .map(([tag, mems], i) => `
-        <div class="tag-row">
-          <div class="tag-name">${tag}</div>
-          <div class="tag-bar-wrap"><div class="tag-bar" style="width:${(mems.length/maxCount*100).toFixed(0)}%;background:${colors[i%colors.length]}"></div></div>
-          <div class="tag-count">${mems.length}</div>
-        </div>
-      `).join('')
+      .map(([tag, mems], i) => {
+        const cached = summaries[tag]
+        const oneLine = cached?.summary || ((mems[0] && mems[0].description) || '')
+        const stale = cached && cached.memory_count !== mems.length
+        const indicator = cached
+          ? (stale ? '<span style="color:var(--yellow);font-size:10px;">(메모리 변동, 갱신 권장)</span> ' : '')
+          : '<span style="color:var(--muted);font-size:10px;">(미생성 — 임시) </span>'
+        const tagSafe = escapeHtml(tag)
+        return `
+        <div style="margin-bottom:14px;">
+          <div class="tag-row" style="margin-bottom:4px;align-items:center;">
+            <div class="tag-name">${tagSafe}</div>
+            <div class="tag-bar-wrap"><div class="tag-bar" style="width:${(mems.length/maxCount*100).toFixed(0)}%;background:${colors[i%colors.length]}"></div></div>
+            <div class="tag-count">${mems.length}</div>
+            <button onclick="deleteDomainTag('${tag.replace(/'/g, "\\'")}', ${mems.length})"
+              title="이 도메인의 모든 팀 메모리 삭제"
+              style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 6px;margin-left:6px;line-height:1;"
+              onmouseover="this.style.color='var(--red)'"
+              onmouseout="this.style.color='var(--muted)'">✕</button>
+          </div>
+          ${oneLine ? `<div style="font-size:12px;color:var(--text);opacity:.85;padding-left:0;line-height:1.45;">↳ ${indicator}${escapeHtml(oneLine)}</div>` : ''}
+        </div>`
+      }).join('')
   }
 
   // 팀원 기여 현황
@@ -492,22 +729,56 @@ function filterMemories() {
   renderMemories(filtered)
 }
 
+function _memEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+}
+function showMemoryModal(idx) {
+  const m = _allMems[idx]
+  if (!m) return
+  const overlay = document.createElement('div')
+  overlay.className = 'mem-modal-overlay'
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove() }
+  overlay.innerHTML = `
+    <div class="mem-modal" onclick="event.stopPropagation()">
+      <div class="mem-modal-head">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="mem-type ${m.type}">${_memEsc(m.type)}</span>
+          <span class="mem-conf">${Math.round((m.confidence||0)*100)}%</span>
+          <span style="font-size:13px;font-weight:600;">${_memEsc(m.description)}</span>
+        </div>
+        <button class="mem-modal-close" onclick="this.closest('.mem-modal-overlay').remove()">닫기 ✕</button>
+      </div>
+      <div class="mem-modal-body">${_memEsc(m.content)}</div>
+      <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:4px;">
+        ${(m.tags||[]).map(t => `<span class="mem-tag">${_memEsc(t)}</span>`).join('')}
+        <span style="margin-left:auto;font-size:11px;color:var(--muted);">${_memEsc(m.platform||'unknown')} · ${_memEsc(m.created_at||'')}</span>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc) }
+  })
+}
 function renderMemories(mems) {
   const grid = document.getElementById('memories-grid')
   if (!mems.length) {
     grid.innerHTML = '<div class="empty" style="grid-column:1/-1">메모리 없음</div>'
     return
   }
-  grid.innerHTML = mems.sort((a,b) => new Date(b.created_at)-new Date(a.created_at)).map(m => `
-    <div class="memory-card">
+  const sorted = [...mems].sort((a,b) => new Date(b.created_at)-new Date(a.created_at))
+  // _allMems의 인덱스 매핑을 위해 description+created_at으로 lookup
+  const idxOf = (m) => _allMems.findIndex(x => x.description === m.description && x.created_at === m.created_at)
+  grid.innerHTML = sorted.map(m => `
+    <div class="memory-card" onclick="showMemoryModal(${idxOf(m)})" title="클릭하면 전문 보기">
       <div class="memory-card-top">
-        <span class="mem-type ${m.type}">${m.type}</span>
-        <span class="mem-conf">${Math.round(m.confidence*100)}%</span>
+        <span class="mem-type ${_memEsc(m.type)}">${_memEsc(m.type)}</span>
+        <span class="mem-conf">${Math.round((m.confidence||0)*100)}%</span>
       </div>
-      <div class="mem-desc">${m.description}</div>
-      <div class="mem-content">${m.content}</div>
-      <div class="mem-tags">${(m.tags||[]).map(t=>`<span class="mem-tag">${t}</span>`).join('')}</div>
-      <div class="mem-time">${m.platform||'unknown'} · ${timeAgo(m.created_at)}</div>
+      <div class="mem-desc">${_memEsc(m.description)}</div>
+      <div class="mem-content">${_memEsc(m.content)}</div>
+      <div class="mem-tags">${(m.tags||[]).map(t=>`<span class="mem-tag">${_memEsc(t)}</span>`).join('')}</div>
+      <div class="mem-time">${_memEsc(m.platform||'unknown')} · ${timeAgo(m.created_at)}</div>
     </div>
   `).join('')
 }
