@@ -31,6 +31,11 @@ SYSTEM = """\
 
 판단이 애매하면: 단일 사실이면 fact, "왜 그렇게 하는가"가 본질이면 preference, "이 도메인에서 이 단어/구조가 무엇인가"가 본질이면 ontology.
 
+## 출력 언어
+description과 content는 반드시 **한국어**로 작성하라. transcript 자체가 영어여도 마찬가지.
+전문 용어·고유명사·라이브러리/툴 이름·코드·파일명·CLI 명령·에러 메시지는 영어 원문 그대로 인용해도 무방.
+문장 골격(주어·서술어·접속어)은 한국어.
+
 응답은 반드시 단일 JSON 객체:
 {{"extracted": [
   {{"type": "fact|preference|ontology", "description": "100자 이내 요약", "content": "본문", "confidence": 0.0-1.0, "tags": ["team:xxx", "domain:yyy"]}}
