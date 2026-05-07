@@ -903,6 +903,21 @@ def member_memory_normalize_tags(
     return memory_store.normalize_existing_tags(session, ctx.team.id, dry_run=dry_run)
 
 
+@app.post("/member/memory/consolidate-namespaces")
+def member_memory_consolidate_namespaces(
+    dry_run: bool = Query(default=True),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """같은 value를 prefix 다르게 박아 분산된 태그를 하나로 통합.
+
+    예: project:a2a-ctgr-match (34건) + a2a-ctgr-match (27건) + domain:a2a-ctgr-match (5건)
+        → 가장 빈번한 변종으로 통합 (count 동률시 prefix 우선순위로 tiebreak).
+    PROTECTED 태그(v*_fixed)와 source:* 는 손대지 않음.
+    """
+    return memory_store.consolidate_namespaces(session, ctx.team.id, dry_run=dry_run)
+
+
 @app.post("/member/memory/dup-scan")
 def member_memory_dup_scan(
     dry_run: bool = Query(default=True),
@@ -928,15 +943,17 @@ def member_memory_cleanup_pipeline(
     ctx: MemberContext = Depends(get_member_ctx),
     session: Session = Depends(get_session),
 ):
-    """정리 파이프라인 일괄 실행: normalize → dup-scan.
+    """정리 파이프라인 일괄 실행: normalize → consolidate → dup-scan.
 
     순서가 중요:
-      1) normalize: V5/v5/_↔- 변종 통합 → 같은 토큰 분포로 만듦
-      2) dup-scan: 정규화된 태그·description 기준으로 의미 중복 머지
+      1) normalize: 표기 변종(V5→v5, batch_api→batch-api) 통일
+      2) consolidate: 같은 value의 prefix 분산 통합 (a2a / project:a2a / domain:a2a → 하나)
+      3) dup-scan: 정리된 태그 기반으로 의미 중복 description 머지
 
     retag-untagged는 LLM 호출 비용이 커서 이 파이프라인에서 제외 — 별도 트리거.
     """
     norm = memory_store.normalize_existing_tags(session, ctx.team.id, dry_run=dry_run)
+    consol = memory_store.consolidate_namespaces(session, ctx.team.id, dry_run=dry_run)
     dup = janitor.dup_scan_for_team(
         session, ctx.team.id, dry_run=dry_run, threshold=dup_threshold
     )
@@ -944,6 +961,7 @@ def member_memory_cleanup_pipeline(
         "dry_run": dry_run,
         "team_id": ctx.team.id,
         "normalize": norm,
+        "consolidate": consol,
         "dup_scan": dup,
     }
 

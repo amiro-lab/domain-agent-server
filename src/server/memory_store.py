@@ -292,6 +292,149 @@ def filter_capture_items(items: list[dict]) -> tuple[list[dict], dict[str, int]]
     return kept, reasons
 
 
+# namespace consolidation — 같은 value를 prefix 다르게 박아 분산된 태그를 하나로 합침.
+# 예: project:a2a-ctgr-match (34건) + a2a-ctgr-match (27건) + domain:a2a-ctgr-match (5건)
+# → 가장 빈도 높은 project:a2a-ctgr-match로 통합.
+# 동률 시 prefix 우선순위로 tiebreak.
+_PREFIX_PRIORITY = ("project", "domain", "team", "system", "tech", "person")
+
+
+def _tag_value(tag: str) -> str:
+    """태그에서 value 부분(콜론 뒤). 콜론 없으면 태그 자체. PROTECTED는 별도 처리됨."""
+    if ":" in tag:
+        return tag.partition(":")[2]
+    return tag
+
+
+def _tag_prefix(tag: str) -> str:
+    """태그 prefix(콜론 앞). 콜론 없으면 빈 문자열 (flat 태그 표시)."""
+    return tag.partition(":")[0] if ":" in tag else ""
+
+
+def _canonical_pick_key(tag: str, count: int) -> tuple:
+    """sort key — count desc → prefix priority asc → 알파 asc.
+
+    tuple로 반환: (-count, prefix_rank, tag). max key가 canonical.
+    실제 사용은 min()이라 (count는 음수, rank는 양수).
+    """
+    prefix = _tag_prefix(tag)
+    rank = _PREFIX_PRIORITY.index(prefix) if prefix in _PREFIX_PRIORITY else len(_PREFIX_PRIORITY)
+    return (-count, rank, tag)
+
+
+def build_namespace_canonical_map(memories: list[Memory]) -> dict[str, str]:
+    """팀 메모리 전체에서 namespace 분산을 분석해 {old_tag: canonical_tag} 매핑 생성.
+
+    규칙:
+      - source:* 는 매핑에서 제외 (메타 태그)
+      - PROTECTED 태그(v\\d+_fixed)는 제외 (의미 보존)
+      - 같은 value를 가진 변종 2개 이상이면 클러스터로 묶음
+      - canonical: count 최대 → 동률시 _PREFIX_PRIORITY 우선 → 동률시 알파순
+      - 변종 모두 같은 prefix면 매핑 안 만듦 (할 일 없음)
+    """
+    from collections import Counter
+
+    tag_counts: Counter[str] = Counter()
+    for m in memories:
+        for t in _parse_tags(m.tags):
+            if not t or t.startswith("source:") or _PROTECTED_TAG_RE.match(t):
+                continue
+            tag_counts[t] += 1
+
+    by_value: dict[str, list[str]] = {}
+    for tag in tag_counts:
+        by_value.setdefault(_tag_value(tag), []).append(tag)
+
+    mapping: dict[str, str] = {}
+    for value, variants in by_value.items():
+        if len(variants) < 2:
+            continue
+        # 모두 같은 prefix면 합칠 게 없음
+        if len({_tag_prefix(v) for v in variants}) == 1:
+            continue
+        canonical = min(variants, key=lambda t: _canonical_pick_key(t, tag_counts[t]))
+        for v in variants:
+            if v != canonical:
+                mapping[v] = canonical
+    return mapping
+
+
+def consolidate_namespaces(
+    session: Session,
+    team_id: str,
+    *,
+    dry_run: bool = True,
+) -> dict:
+    """팀 메모리의 namespace 분산을 일괄 통합 (project:X / X / domain:X → 가장 빈번한 변종).
+
+    PROTECTED 태그(v*_fixed)와 source:* 는 손대지 않음.
+    반환: {dry_run, team_id, scanned, changed_memories, clusters, mapping_samples}
+    """
+    mems = (
+        session.query(Memory)
+        .filter_by(team_id=team_id)
+        .filter(Memory.archived_at.is_(None))
+        .all()
+    )
+    mapping = build_namespace_canonical_map(mems)
+    if not mapping:
+        return {
+            "dry_run": dry_run,
+            "team_id": team_id,
+            "scanned": len(mems),
+            "changed_memories": 0,
+            "clusters": 0,
+            "mapping_samples": [],
+        }
+
+    # mapping을 canonical 기준 클러스터로 재구성 (UI 표시용)
+    clusters: dict[str, list[tuple[str, int]]] = {}
+    cluster_counts: dict[str, int] = {}
+    for mem in mems:
+        for t in _parse_tags(mem.tags):
+            cluster_counts[t] = cluster_counts.get(t, 0) + 1
+    for old, canonical in mapping.items():
+        clusters.setdefault(canonical, []).append((old, cluster_counts.get(old, 0)))
+
+    changed_memories = 0
+    for m in mems:
+        original = _parse_tags(m.tags)
+        replaced = [mapping.get(t, t) for t in original]
+        # dedup (변종 통합 후 같은 태그가 두 번 나올 수 있음)
+        deduped: list[str] = []
+        for t in replaced:
+            if t and t not in deduped:
+                deduped.append(t)
+        if deduped != original:
+            changed_memories += 1
+            if not dry_run:
+                m.tags = json.dumps(deduped, ensure_ascii=False)
+
+    if not dry_run:
+        session.commit()
+
+    samples = [
+        {
+            "canonical": canonical,
+            "canonical_count": cluster_counts.get(canonical, 0),
+            "merged_from": [{"tag": old, "count": cnt} for old, cnt in items],
+        }
+        for canonical, items in sorted(
+            clusters.items(),
+            key=lambda kv: -cluster_counts.get(kv[0], 0),
+        )[:30]
+    ]
+
+    return {
+        "dry_run": dry_run,
+        "team_id": team_id,
+        "scanned": len(mems),
+        "changed_memories": changed_memories,
+        "clusters": len(clusters),
+        "mapping_samples": samples,
+    }
+
+
 def normalize_existing_tags(session: Session, team_id: str, *, dry_run: bool = True) -> dict:
     """팀의 active 메모리에서 정규화가 필요한 태그를 일괄 갱신.
 

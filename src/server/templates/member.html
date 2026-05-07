@@ -396,6 +396,31 @@ main { padding: 28px; max-width: 1200px; }
       </div>
 
       <div class="panel">
+        <div class="panel-title">namespace 통합 (project:X / X / domain:X → 하나로)</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;">
+          같은 value를 다른 prefix로 박아 분산된 태그를 가장 빈번한 형태로 통합합니다.
+          예: <code>project:a2a-ctgr-match (34건)</code> + <code>a2a-ctgr-match (27건)</code>
+          → 둘 다 <code>project:a2a-ctgr-match</code>로.
+          PROTECTED 태그(<code style="color:var(--yellow);">v*_fixed</code>)와 <code>source:*</code>는 제외.
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <button onclick="consolidateNamespacesRun(true)" id="btn-cons-preview" style="
+            background:var(--blue);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            미리보기 (dry-run)
+          </button>
+          <button onclick="consolidateNamespacesRun(false)" id="btn-cons-apply" style="
+            background:var(--purple);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            namespace 통합 실행
+          </button>
+        </div>
+        <div id="cons-summary" style="display:none;font-size:13px;margin-bottom:10px;
+          padding:12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);"></div>
+        <div id="cons-details" style="display:none;font-size:12px;color:var(--text);"></div>
+      </div>
+
+      <div class="panel">
         <div class="panel-title">중복 머지 (Jaccard ≥ threshold)</div>
         <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px;">
           비슷한 description의 메모리 클러스터를 canonical 1개에 합칩니다.
@@ -1067,6 +1092,74 @@ function renderOntologyCards() {
 }
 
 
+// ── 메모리 정리: namespace consolidation ──────────────────
+async function consolidateNamespacesRun(dryRun) {
+  if (!dryRun) {
+    const ok = confirm(
+      `namespace 통합을 실제 실행합니다.\n\n` +
+      `같은 value를 가진 변종(project:X / X / domain:X)을 가장 빈번한 형태로 일괄 교체합니다.\n` +
+      `PROTECTED 태그(v*_fixed)와 source:* 는 제외.\n\n` +
+      `먼저 dry-run으로 매핑을 확인하셨나요?`
+    )
+    if (!ok) return
+  }
+  const btnP = document.getElementById('btn-cons-preview')
+  const btnA = document.getElementById('btn-cons-apply')
+  const summary = document.getElementById('cons-summary')
+  const details = document.getElementById('cons-details')
+  btnP.disabled = btnA.disabled = true
+  btnP.style.opacity = btnA.style.opacity = '.6'
+  summary.style.display = 'block'
+  summary.innerHTML = '<span style="color:var(--muted);">실행 중...</span>'
+  details.style.display = 'none'
+
+  try {
+    const res = await API(`/member/memory/consolidate-namespaces?dry_run=${dryRun}`, 'POST')
+    const tone = dryRun ? 'var(--blue)' : 'var(--green)'
+    summary.innerHTML = `
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <strong style="color:${tone};">${dryRun ? '미리보기' : '실행 완료'}</strong>
+        <span>scanned <strong>${res.scanned}</strong></span>
+        <span>clusters <strong>${res.clusters}</strong></span>
+        <span>changed memories <strong style="color:var(--yellow);">${res.changed_memories}</strong></span>
+      </div>
+    `
+    if (!res.mapping_samples?.length) {
+      details.style.display = 'block'
+      details.innerHTML = `<div style="color:var(--muted);padding:14px;">통합 대상 없음.</div>`
+      return
+    }
+    const rows = res.mapping_samples.map(s => `
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                  padding:12px 14px;margin-bottom:10px;">
+        <div style="margin-bottom:6px;">
+          <span style="color:var(--green);font-weight:600;">canonical</span>
+          <code style="background:var(--bg2);padding:2px 6px;border-radius:4px;margin-left:6px;">${escapeHtml(s.canonical)}</code>
+          <span style="color:var(--muted);font-size:11px;margin-left:6px;">(${s.canonical_count}건)</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">아래 변종이 위로 통합됨:</div>
+        <ul style="list-style:none;padding-left:8px;">
+          ${s.merged_from.map(m => `
+            <li style="font-size:12px;padding:2px 0;">
+              <span style="color:var(--red);">−</span>
+              <code style="background:var(--bg2);padding:1px 5px;border-radius:3px;">${escapeHtml(m.tag)}</code>
+              <span style="color:var(--muted);font-size:10px;">(${m.count}건)</span>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `).join('')
+    details.style.display = 'block'
+    details.innerHTML = `<div style="color:var(--muted);font-size:11px;margin-bottom:8px;">상위 ${res.mapping_samples.length}개 클러스터 (총 ${res.clusters}개):</div>` + rows
+  } catch (e) {
+    summary.innerHTML = `<span style="color:var(--red);">에러: ${escapeHtml(String(e.message || e))}</span>`
+  } finally {
+    btnP.disabled = btnA.disabled = false
+    btnP.style.opacity = btnA.style.opacity = '1'
+  }
+}
+
+
 // ── 메모리 정리: cleanup pipeline ─────────────────────────
 async function cleanupPipelineRun(dryRun) {
   const th = parseFloat(document.getElementById('pipeline-threshold').value) || 0.6
@@ -1097,21 +1190,25 @@ async function cleanupPipelineRun(dryRun) {
       <div style="margin-bottom:10px;">
         <strong style="color:${tone};">${dryRun ? '미리보기' : '실행 완료'}</strong>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
         <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;">
           <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">1. 정규화</div>
           <div>scanned <strong>${res.normalize.scanned}</strong></div>
           <div>changed <strong style="color:var(--yellow);">${res.normalize.changed}</strong></div>
         </div>
         <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;">
-          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">2. 중복 머지</div>
-          <div>active <strong>${res.dup_scan.active}</strong></div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">2. namespace 통합</div>
+          <div>clusters <strong>${res.consolidate.clusters}</strong></div>
+          <div>changed <strong style="color:var(--yellow);">${res.consolidate.changed_memories}</strong></div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">3. 중복 머지</div>
           <div>cluster <strong>${res.dup_scan.clusters}</strong></div>
           <div>merged <strong style="color:var(--yellow);">${res.dup_scan.merged}</strong></div>
         </div>
       </div>
       <div style="font-size:11px;color:var(--muted);margin-top:10px;">
-        세부 변경 항목은 아래 '태그 정규화' 및 '중복 머지' 섹션에서 개별 dry-run으로 확인하세요.
+        세부 변경 항목은 아래 개별 섹션에서 dry-run으로 확인하세요.
       </div>
     `
   } catch (e) {

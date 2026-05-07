@@ -6,13 +6,17 @@ import pytest
 
 
 def _call(session, team_id, *, dry_run, dup_threshold=0.6):
-    """엔드포인트 함수를 직접 호출 — TestClient 인프라 없이 로직 검증."""
-    from server.memory_store import normalize_existing_tags
+    """엔드포인트 함수를 직접 호출 — TestClient 인프라 없이 로직 검증.
+
+    실제 cleanup-pipeline은 normalize → consolidate → dup_scan 3단계.
+    """
+    from server.memory_store import normalize_existing_tags, consolidate_namespaces
     from server.janitor import dup_scan_for_team
 
     norm = normalize_existing_tags(session, team_id, dry_run=dry_run)
+    consol = consolidate_namespaces(session, team_id, dry_run=dry_run)
     dup = dup_scan_for_team(session, team_id, dry_run=dry_run, threshold=dup_threshold)
-    return {"normalize": norm, "dup_scan": dup}
+    return {"normalize": norm, "consolidate": consol, "dup_scan": dup}
 
 
 def test_pipeline_dry_run_no_mutation(session, make_memory):
@@ -92,13 +96,37 @@ def test_pipeline_team_scoped(session, make_memory):
     assert json.loads(b.tags) == ["project:V5"]
 
 
-def test_pipeline_returns_both_subresults(session, make_memory):
+def test_pipeline_returns_all_subresults(session, make_memory):
     make_memory(tags='["project:V5"]')
     res = _call(session, "team-test", dry_run=True)
 
-    assert "normalize" in res and "dup_scan" in res
+    assert "normalize" in res and "consolidate" in res and "dup_scan" in res
     assert "scanned" in res["normalize"]
     assert "changed" in res["normalize"]
+    assert "clusters" in res["consolidate"]
+    assert "changed_memories" in res["consolidate"]
     assert "active" in res["dup_scan"]
     assert "clusters" in res["dup_scan"]
     assert "merged" in res["dup_scan"]
+
+
+def test_pipeline_normalize_then_consolidate_unifies_variants(session, make_memory):
+    """정규화로 V5→v5 통일된 후 consolidate로 prefix 통합되는 것 검증.
+
+    a2a-ctgr-match가 flat + project: 두 형태로 분산되면, normalize는
+    표기 차이 없으므로 0건 변경, consolidate가 다수 변종으로 통합.
+    """
+    # flat 3건, project: 5건 (project가 더 많음 → canonical)
+    for _ in range(3):
+        make_memory(tags='["a2a-ctgr-match"]')
+    for _ in range(5):
+        make_memory(tags='["project:a2a-ctgr-match"]')
+
+    res = _call(session, "team-test", dry_run=False)
+    assert res["normalize"]["changed"] == 0
+    assert res["consolidate"]["changed_memories"] == 3  # flat 3건이 변경됨
+
+    from server.db import Memory
+    flat_count = sum(1 for m in session.query(Memory).all()
+                     if "a2a-ctgr-match" in json.loads(m.tags) and "project:a2a-ctgr-match" not in json.loads(m.tags))
+    assert flat_count == 0  # 모든 flat이 project:로 통합됨
