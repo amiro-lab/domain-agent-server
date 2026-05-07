@@ -56,6 +56,13 @@ def startup():
     _load_provider_settings()
     _reload_schedules()
     janitor.register(scheduler)
+    scheduler.add_job(
+        reporter.rebuild_all_team_summaries,
+        CronTrigger(day_of_week="sun", hour=4, minute=30),
+        id="domain_summary_rebuild",
+        replace_existing=True,
+        max_instances=1,
+    )
     scheduler.start()
 
 
