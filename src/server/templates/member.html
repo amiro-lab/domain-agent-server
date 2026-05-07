@@ -343,6 +343,35 @@ main { padding: 28px; max-width: 1200px; }
     <!-- 메모리 정리 -->
     <div class="page" id="page-cleanup">
       <div class="panel">
+        <div class="panel-title">전체 정리 파이프라인</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;">
+          정규화 → 중복 머지를 한 번에 실행. 정규화로 표기 변종을 통일한 뒤
+          그 결과 위에서 의미 중복을 잡아내므로 따로 도는 것보다 정확합니다.
+          retag-untagged(LLM 호출 비용)는 이 파이프라인에 포함하지 않음.
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);">
+            dup threshold
+            <input id="pipeline-threshold" type="number" min="0.30" max="0.95" step="0.05" value="0.60"
+              style="width:80px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;
+                     padding:5px 8px;color:var(--text);font-size:12px;">
+          </label>
+          <button onclick="cleanupPipelineRun(true)" id="btn-pipe-preview" style="
+            background:var(--blue);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            미리보기 (dry-run)
+          </button>
+          <button onclick="cleanupPipelineRun(false)" id="btn-pipe-apply" style="
+            background:var(--red);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            전체 정리 실행
+          </button>
+        </div>
+        <div id="pipe-summary" style="display:none;font-size:13px;
+          padding:12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);"></div>
+      </div>
+
+      <div class="panel">
         <div class="panel-title">태그 정규화 (canonical: 소문자 + 하이픈)</div>
         <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;">
           V5 → v5, batch_api → batch-api, Domain:Auth → domain:auth 같은 표기 변종을 통일합니다.
@@ -1035,6 +1064,62 @@ function renderOntologyCards() {
       </div>
     `
   }).join('')
+}
+
+
+// ── 메모리 정리: cleanup pipeline ─────────────────────────
+async function cleanupPipelineRun(dryRun) {
+  const th = parseFloat(document.getElementById('pipeline-threshold').value) || 0.6
+  if (!dryRun) {
+    const ok = confirm(
+      `전체 정리 파이프라인을 실제 실행합니다.\n\n` +
+      `1) 태그 정규화 — V5→v5, batch_api→batch-api 등\n` +
+      `2) 중복 머지 — Jaccard ≥ ${th}, canonical만 남기고 나머지 archive\n\n` +
+      `먼저 dry-run으로 결과를 확인하셨나요?`
+    )
+    if (!ok) return
+  }
+  const btnP = document.getElementById('btn-pipe-preview')
+  const btnA = document.getElementById('btn-pipe-apply')
+  const summary = document.getElementById('pipe-summary')
+  btnP.disabled = btnA.disabled = true
+  btnP.style.opacity = btnA.style.opacity = '.6'
+  summary.style.display = 'block'
+  summary.innerHTML = '<span style="color:var(--muted);">실행 중...</span>'
+
+  try {
+    const res = await API(
+      `/member/memory/cleanup-pipeline?dry_run=${dryRun}&dup_threshold=${th}`,
+      'POST',
+    )
+    const tone = dryRun ? 'var(--blue)' : 'var(--green)'
+    summary.innerHTML = `
+      <div style="margin-bottom:10px;">
+        <strong style="color:${tone};">${dryRun ? '미리보기' : '실행 완료'}</strong>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">1. 정규화</div>
+          <div>scanned <strong>${res.normalize.scanned}</strong></div>
+          <div>changed <strong style="color:var(--yellow);">${res.normalize.changed}</strong></div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">2. 중복 머지</div>
+          <div>active <strong>${res.dup_scan.active}</strong></div>
+          <div>cluster <strong>${res.dup_scan.clusters}</strong></div>
+          <div>merged <strong style="color:var(--yellow);">${res.dup_scan.merged}</strong></div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;">
+        세부 변경 항목은 아래 '태그 정규화' 및 '중복 머지' 섹션에서 개별 dry-run으로 확인하세요.
+      </div>
+    `
+  } catch (e) {
+    summary.innerHTML = `<span style="color:var(--red);">에러: ${escapeHtml(String(e.message || e))}</span>`
+  } finally {
+    btnP.disabled = btnA.disabled = false
+    btnP.style.opacity = btnA.style.opacity = '1'
+  }
 }
 
 

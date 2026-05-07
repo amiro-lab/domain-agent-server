@@ -921,6 +921,33 @@ def member_memory_dup_scan(
     )
 
 
+@app.post("/member/memory/cleanup-pipeline")
+def member_memory_cleanup_pipeline(
+    dry_run: bool = Query(default=True),
+    dup_threshold: float = Query(default=0.6, ge=0.3, le=0.95),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """정리 파이프라인 일괄 실행: normalize → dup-scan.
+
+    순서가 중요:
+      1) normalize: V5/v5/_↔- 변종 통합 → 같은 토큰 분포로 만듦
+      2) dup-scan: 정규화된 태그·description 기준으로 의미 중복 머지
+
+    retag-untagged는 LLM 호출 비용이 커서 이 파이프라인에서 제외 — 별도 트리거.
+    """
+    norm = memory_store.normalize_existing_tags(session, ctx.team.id, dry_run=dry_run)
+    dup = janitor.dup_scan_for_team(
+        session, ctx.team.id, dry_run=dry_run, threshold=dup_threshold
+    )
+    return {
+        "dry_run": dry_run,
+        "team_id": ctx.team.id,
+        "normalize": norm,
+        "dup_scan": dup,
+    }
+
+
 @app.get("/member/ontology/graph")
 def member_ontology_graph(
     min_shared: int = Query(default=1, ge=1, le=10),
