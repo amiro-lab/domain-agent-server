@@ -187,6 +187,7 @@ main { padding: 28px; max-width: 1200px; }
     <div class="tab" onclick="goto('knowledge', this)">팀 지식 검색</div>
     <div class="tab" onclick="goto('reports', this)">리포트</div>
     <div class="tab" onclick="goto('cleanup', this)">메모리 정리</div>
+    <div class="tab" onclick="goto('ontology', this)">온톨로지 카드</div>
     <div class="tab" onclick="goto('graph', this)">온톨로지 그래프</div>
   </div>
 
@@ -372,6 +373,23 @@ main { padding: 28px; max-width: 1200px; }
       </div>
     </div>
 
+    <!-- 온톨로지 카드 -->
+    <div class="page" id="page-ontology">
+      <div class="panel">
+        <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+          <span>프로젝트·도메인별 ontology</span>
+          <div style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted);">
+            <span id="ontology-total" class="team-badge">총 0</span>
+            <input id="ontology-filter" type="text" placeholder="태그·내용 필터..."
+              oninput="renderOntologyCards()" style="
+              background:var(--bg3);border:1px solid var(--border);border-radius:6px;
+              padding:5px 10px;color:var(--text);font-size:12px;width:200px;">
+          </div>
+        </div>
+        <div id="ontology-cards" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
     <!-- 온톨로지 그래프 -->
     <div class="page" id="page-graph">
       <div class="panel" style="padding:0;overflow:hidden;">
@@ -496,6 +514,7 @@ function goto(page, el) {
   if (page === 'team') loadTeamDomain()
   if (page === 'knowledge') loadKnowledge()
   if (page === 'reports') loadReports()
+  if (page === 'ontology') loadOntologyCards()
   if (page === 'graph') loadOntologyGraph()
 }
 
@@ -917,6 +936,83 @@ function copyWeekly() {
     setTimeout(() => btn.textContent = '📋 클립보드 복사', 2000)
   })
 }
+
+// ── 온톨로지 카드 ─────────────────────────────────────────
+let _ontologyGroups = []
+
+async function loadOntologyCards() {
+  const wrap = document.getElementById('ontology-cards')
+  wrap.innerHTML = '<div class="loading">로딩 중...</div>'
+  try {
+    const res = await API('/member/ontology/cards')
+    _ontologyGroups = res.groups || []
+    document.getElementById('ontology-total').textContent = `총 ${res.total ?? 0}`
+    renderOntologyCards()
+  } catch (e) {
+    wrap.innerHTML = `<div style="color:var(--red);padding:14px;">에러: ${escapeHtml(String(e.message || e))}</div>`
+  }
+}
+
+function renderOntologyCards() {
+  const wrap = document.getElementById('ontology-cards')
+  const q = (document.getElementById('ontology-filter')?.value || '').trim().toLowerCase()
+  if (!_ontologyGroups.length) {
+    wrap.innerHTML = '<div style="color:var(--muted);padding:14px;">ontology 메모리 없음.</div>'
+    return
+  }
+  const groups = q
+    ? _ontologyGroups.map(g => ({
+        ...g,
+        items: g.items.filter(it =>
+          (it.description || '').toLowerCase().includes(q) ||
+          (it.content || '').toLowerCase().includes(q) ||
+          (it.tags || []).some(t => t.toLowerCase().includes(q)),
+        ),
+      })).filter(g => g.items.length)
+    : _ontologyGroups
+
+  if (!groups.length) {
+    wrap.innerHTML = '<div style="color:var(--muted);padding:14px;">필터 일치 항목 없음.</div>'
+    return
+  }
+
+  wrap.innerHTML = groups.map(g => {
+    const cards = g.items.map(it => `
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;
+                  padding:14px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+          <div style="font-weight:600;line-height:1.4;">${escapeHtml(it.description || '(제목 없음)')}</div>
+          <span style="font-size:10px;color:var(--muted);white-space:nowrap;">conf ${it.confidence?.toFixed?.(2) ?? '-'}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text);line-height:1.6;
+                    display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;
+                    overflow:hidden;">${escapeHtml(it.content || '')}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:auto;">
+          ${(it.tags || []).filter(t => !t.startsWith('source:')).slice(0, 6).map(t => `
+            <span style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+                         padding:2px 8px;font-size:10px;color:var(--muted);">${escapeHtml(t)}</span>
+          `).join('')}
+        </div>
+        <div style="font-size:10px;color:var(--muted);display:flex;justify-content:space-between;">
+          <span>${escapeHtml(it.captured_by || '-')}</span>
+          <span>${escapeHtml((it.last_verified_at || '').slice(0, 10))}</span>
+        </div>
+      </div>
+    `).join('')
+    return `
+      <div style="margin-bottom:24px;">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+          <h3 style="font-size:14px;font-weight:600;color:var(--blue);">${escapeHtml(g.tag)}</h3>
+          <span style="color:var(--muted);font-size:11px;">${g.items.length}건</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
+          ${cards}
+        </div>
+      </div>
+    `
+  }).join('')
+}
+
 
 // ── 메모리 정리: dup-scan ─────────────────────────────────
 async function dupScanRun(dryRun) {

@@ -907,6 +907,58 @@ def member_ontology_graph(
     return _build_ontology_graph(mems, min_shared)
 
 
+def _build_ontology_cards(mems) -> dict:
+    """ontology 메모리를 project:/domain:/일반 태그 우선순위로 그룹화.
+
+    primary 결정: project: > domain: > 첫 non-source 태그 > 'uncategorized'.
+    그룹 내부는 confidence desc, 그룹 자체는 count desc로 정렬.
+    """
+    groups: dict[str, list[dict]] = {}
+    for m in mems:
+        try:
+            raw_tags = json.loads(m.tags or "[]")
+        except Exception:
+            raw_tags = []
+        primary = next(
+            (t for t in raw_tags if t.startswith("project:")),
+            None,
+        ) or next(
+            (t for t in raw_tags if t.startswith("domain:")),
+            None,
+        ) or next(
+            (t for t in raw_tags if not t.startswith("source:")),
+            "uncategorized",
+        )
+        groups.setdefault(primary, []).append({
+            "id": m.id,
+            "description": m.description,
+            "content": m.content,
+            "tags": raw_tags,
+            "confidence": m.confidence,
+            "captured_by": m.captured_by or "",
+            "last_verified_at": (
+                m.last_verified_at.isoformat() if m.last_verified_at else ""
+            ),
+        })
+    for items in groups.values():
+        items.sort(key=lambda x: (-x["confidence"], x["id"]))
+    sorted_groups = sorted(
+        ({"tag": k, "count": len(v), "items": v} for k, v in groups.items()),
+        key=lambda g: (-g["count"], g["tag"]),
+    )
+    return {"total": len(mems), "groups": sorted_groups}
+
+
+@app.get("/member/ontology/cards")
+def member_ontology_cards(
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """팀 ontology 메모리를 project:/domain: prefix로 그룹화한 카드 뷰."""
+    mems = memory_store.list_all(session, ctx.team.id, mem_type="ontology")
+    return _build_ontology_cards(mems)
+
+
 def _build_ontology_graph(mems, min_shared: int) -> dict:
     nodes = []
     tag_sets: list[set[str]] = []
