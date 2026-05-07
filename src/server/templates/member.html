@@ -421,6 +421,36 @@ main { padding: 28px; max-width: 1200px; }
       </div>
 
       <div class="panel">
+        <div class="panel-title">영어 메모리 한국어 번역</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;">
+          영어 transcript에서 추출돼 한글 0인 메모리를 한국어로 번역합니다.
+          전문 용어·코드·고유명사는 영어 원문 인용 유지. Haiku 호출 비용 발생 (배치당 10개).
+          PROTECTED 태그(<code style="color:var(--yellow);">v*_fixed</code>)는 제외.
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);">
+            limit
+            <input id="trans-limit" type="number" min="1" max="500" value="50"
+              style="width:70px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;
+                     padding:5px 8px;color:var(--text);font-size:12px;">
+          </label>
+          <button onclick="translateToKoreanRun(true)" id="btn-trans-preview" style="
+            background:var(--blue);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            후보 미리보기 (LLM 비용 0)
+          </button>
+          <button onclick="translateToKoreanRun(false)" id="btn-trans-apply" style="
+            background:var(--purple);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            번역 실행 (Haiku 호출)
+          </button>
+        </div>
+        <div id="trans-summary" style="display:none;font-size:13px;margin-bottom:10px;
+          padding:12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);"></div>
+        <div id="trans-details" style="display:none;font-size:12px;color:var(--text);"></div>
+      </div>
+
+      <div class="panel">
         <div class="panel-title">중복 머지 (Jaccard ≥ threshold)</div>
         <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px;">
           비슷한 description의 메모리 클러스터를 canonical 1개에 합칩니다.
@@ -1089,6 +1119,76 @@ function renderOntologyCards() {
       </div>
     `
   }).join('')
+}
+
+
+// ── 메모리 정리: 영어 → 한국어 번역 ──────────────────────
+async function translateToKoreanRun(dryRun) {
+  const limit = parseInt(document.getElementById('trans-limit').value) || 50
+  if (!dryRun) {
+    const ok = confirm(
+      `영어 메모리 번역을 실제 실행합니다.\n\n` +
+      `Haiku로 10개씩 배치 LLM 호출 → description/content 한국어 교체.\n` +
+      `최대 ${limit}개 메모리 처리. PROTECTED 태그는 제외.\n\n` +
+      `먼저 dry-run으로 후보 확인하셨나요?`
+    )
+    if (!ok) return
+  }
+  const btnP = document.getElementById('btn-trans-preview')
+  const btnA = document.getElementById('btn-trans-apply')
+  const summary = document.getElementById('trans-summary')
+  const details = document.getElementById('trans-details')
+  btnP.disabled = btnA.disabled = true
+  btnP.style.opacity = btnA.style.opacity = '.6'
+  summary.style.display = 'block'
+  summary.innerHTML = '<span style="color:var(--muted);">' +
+    (dryRun ? '후보 스캔 중...' : '번역 중 (배치당 5~10초)...') + '</span>'
+  details.style.display = 'none'
+
+  try {
+    const res = await API(
+      `/member/memory/translate-to-korean?dry_run=${dryRun}&limit=${limit}`,
+      'POST',
+    )
+    const tone = dryRun ? 'var(--blue)' : 'var(--green)'
+    summary.innerHTML = `
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <strong style="color:${tone};">${dryRun ? '후보 미리보기' : '번역 완료'}</strong>
+        <span>candidates <strong>${res.candidates}</strong></span>
+        ${!dryRun ? `<span>translated <strong style="color:var(--yellow);">${res.translated}</strong></span>` : ''}
+        ${(!dryRun && res.skipped_conflict) ? `<span style="color:var(--red);">conflict skipped ${res.skipped_conflict}</span>` : ''}
+      </div>
+    `
+    if (!res.samples?.length) {
+      details.style.display = 'block'
+      details.innerHTML = `<div style="color:var(--muted);padding:14px;">대상 없음.</div>`
+      return
+    }
+    const items = dryRun
+      ? res.samples.map(s => `
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                      padding:10px 14px;margin-bottom:8px;">
+            <div style="color:var(--muted);font-size:11px;margin-bottom:4px;">${escapeHtml(s.id)}</div>
+            <div style="font-size:12px;margin-bottom:4px;">${escapeHtml(s.description)}</div>
+            <div style="font-size:11px;color:var(--muted);font-family:monospace;">${escapeHtml(s.content_preview)}…</div>
+          </div>
+        `).join('')
+      : res.samples.map(s => `
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                      padding:10px 14px;margin-bottom:8px;">
+            <div style="color:var(--muted);font-size:11px;margin-bottom:4px;">${escapeHtml(s.id)}</div>
+            <div><span style="color:var(--red);">−</span> ${escapeHtml(s.before)}</div>
+            <div><span style="color:var(--green);">+</span> ${escapeHtml(s.after)}</div>
+          </div>
+        `).join('')
+    details.style.display = 'block'
+    details.innerHTML = `<div style="color:var(--muted);font-size:11px;margin-bottom:8px;">샘플 ${res.samples.length}건:</div>` + items
+  } catch (e) {
+    summary.innerHTML = `<span style="color:var(--red);">에러: ${escapeHtml(String(e.message || e))}</span>`
+  } finally {
+    btnP.disabled = btnA.disabled = false
+    btnP.style.opacity = btnA.style.opacity = '1'
+  }
 }
 
 

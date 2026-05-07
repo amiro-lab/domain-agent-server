@@ -918,6 +918,24 @@ def member_memory_consolidate_namespaces(
     return memory_store.consolidate_namespaces(session, ctx.team.id, dry_run=dry_run)
 
 
+@app.post("/member/memory/translate-to-korean")
+def member_memory_translate_to_korean(
+    dry_run: bool = Query(default=True),
+    limit: int = Query(default=50, ge=1, le=500),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """영어로 저장된 description/content를 가진 active 메모리를 한국어로 번역.
+
+    judging: description+content에 한글 0개 + 라틴 30+자 → 영어 메모리.
+    dry_run=True 면 후보 카운트+샘플만(LLM 호출 0).
+    dry_run=False 면 10개씩 배치로 Haiku 호출. PROTECTED 태그는 제외.
+    """
+    return memory_store.translate_english_memories(
+        session, ctx.team.id, dry_run=dry_run, limit=limit,
+    )
+
+
 @app.post("/member/memory/dup-scan")
 def member_memory_dup_scan(
     dry_run: bool = Query(default=True),

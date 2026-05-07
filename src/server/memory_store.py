@@ -435,6 +435,155 @@ def consolidate_namespaces(
     }
 
 
+def _has_korean(text: str | None) -> bool:
+    """가-힣 범위 글자가 하나라도 있으면 True."""
+    if not text:
+        return False
+    return any("가" <= c <= "힣" for c in text)
+
+
+def _looks_english(description: str | None, content: str | None) -> bool:
+    """description+content에 한글 0개 + 라틴 알파벳 30+자면 영어로 판정.
+
+    drunk-bar 같은 멀티에이전트 transcript처럼 한글이 전혀 안 섞인 경우만
+    번역 대상. 한국어 본문에 영어 코드/용어 섞인 일반 메모리는 통과시킴.
+    """
+    if _has_korean(description) or _has_korean(content):
+        return False
+    blob = f"{description or ''} {content or ''}"
+    latin = sum(1 for c in blob if c.isalpha() and ord(c) < 128)
+    return latin >= 30
+
+
+def find_english_memories(
+    session: Session, team_id: str, *, limit: int = 200,
+) -> list[Memory]:
+    """팀 active 메모리 중 영어로 판정된 것 (limit개 까지)."""
+    mems = (
+        session.query(Memory)
+        .filter_by(team_id=team_id)
+        .filter(Memory.archived_at.is_(None))
+        .all()
+    )
+    return [m for m in mems if _looks_english(m.description, m.content)][:limit]
+
+
+def translate_english_memories(
+    session: Session, team_id: str, *, dry_run: bool = True, limit: int = 50,
+) -> dict:
+    """영어 description/content를 가진 active 메모리를 한국어로 번역.
+
+    동작:
+      1) _looks_english 통과 항목 수집 (최대 limit개)
+      2) dry_run=True: 번역 안 하고 후보 카운트 + 샘플만 반환 (LLM 비용 0)
+      3) dry_run=False: 10개씩 배치로 LLM(Haiku)에 번역 요청 → 결과로 description/content 교체
+         description_hash도 갱신. 번역 후 hash가 다른 메모리와 충돌하면 그 항목 스킵.
+
+    PROTECTED 태그는 번역 대상에서 제외 (의미 보존).
+    """
+    candidates = find_english_memories(session, team_id, limit=limit)
+    # PROTECTED는 의미 보존을 위해 번역 안 함
+    targets = [m for m in candidates if not has_protected_tag(_parse_tags(m.tags))]
+
+    if not targets:
+        return {
+            "dry_run": dry_run, "team_id": team_id,
+            "candidates": 0, "translated": 0, "samples": [],
+        }
+
+    if dry_run:
+        return {
+            "dry_run": True, "team_id": team_id,
+            "candidates": len(targets),
+            "translated": 0,
+            "samples": [
+                {
+                    "id": m.id,
+                    "description": m.description,
+                    "content_preview": (m.content or "")[:200],
+                }
+                for m in targets[:20]
+            ],
+        }
+
+    from server.reporter import _llm_summarize
+
+    translated_count = 0
+    samples: list[dict] = []
+    skipped_conflict = 0
+
+    for batch_start in range(0, len(targets), 10):
+        batch = targets[batch_start:batch_start + 10]
+        payload = [
+            {"id": m.id, "description": m.description, "content": m.content}
+            for m in batch
+        ]
+        prompt = (
+            "다음 메모리 항목들의 description과 content를 한국어로 번역하라.\n"
+            "전문 용어·고유명사·코드·라이브러리/툴 이름·파일명·CLI 명령·에러 메시지는 영어 원문 인용 유지.\n"
+            "문장 골격(주어/서술어/접속어)은 한국어로.\n"
+            "응답은 단일 JSON 객체. 마크다운 코드블록 금지:\n"
+            '{"translated": [{"id":"...", "description":"...", "content":"..."}, ...]}\n'
+            "id는 입력과 정확히 동일하게 유지. content가 길면 의미 유지하면서 한국어로 자연스럽게 다시 써라.\n\n"
+            "입력:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        )
+        raw = _llm_summarize(prompt, "translate_to_korean", {"team_id": team_id, "team_name": ""})
+        try:
+            s = raw.strip()
+            if s.startswith("```"):
+                s = s.split("\n", 1)[1] if "\n" in s else ""
+                s = s.rsplit("```", 1)[0].strip()
+            if "{" in s and "}" in s:
+                s = s[s.index("{"):s.rindex("}") + 1]
+            parsed = json.loads(s).get("translated", [])
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            continue
+
+        by_id = {m.id: m for m in batch}
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            mid = item.get("id")
+            mem = by_id.get(mid)
+            if not mem:
+                continue
+            new_desc = (item.get("description") or "").strip()
+            new_content = (item.get("content") or "").strip()
+            if not new_desc or not new_content:
+                continue
+            new_hash = _desc_hash(new_desc)
+            # description_hash 충돌 검사 — 번역 후 다른 메모리와 같아지면 스킵
+            if new_hash != mem.description_hash:
+                conflict = (
+                    session.query(Memory)
+                    .filter_by(team_id=team_id, description_hash=new_hash)
+                    .first()
+                )
+                if conflict and conflict.id != mem.id:
+                    skipped_conflict += 1
+                    continue
+
+            old_desc = mem.description
+            mem.description = new_desc
+            mem.content = new_content
+            mem.description_hash = new_hash
+            translated_count += 1
+            if len(samples) < 20:
+                samples.append({
+                    "id": mid, "before": old_desc, "after": new_desc,
+                })
+
+    session.commit()
+
+    return {
+        "dry_run": False, "team_id": team_id,
+        "candidates": len(targets),
+        "translated": translated_count,
+        "skipped_conflict": skipped_conflict,
+        "samples": samples,
+    }
+
+
 def normalize_existing_tags(session: Session, team_id: str, *, dry_run: bool = True) -> dict:
     """팀의 active 메모리에서 정규화가 필요한 태그를 일괄 갱신.
 
