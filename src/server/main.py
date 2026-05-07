@@ -174,6 +174,7 @@ class CaptureRequest(BaseModel):
     member: Optional[str] = None
     messages: Optional[list[dict]] = None
     transcript: Optional[str] = None
+    session_id: Optional[str] = None  # transcript 출처 추적용 (Phase A: 세션 attribution)
 
 
 class MemoryRequest(BaseModel):
@@ -719,6 +720,11 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest, fallback
             f"[capture] team={team_id} extracted={len(items)} kept={len(kept)} "
             f"rejected={dict(reject_reasons)}"
         )
+    # session_id 자동 도출 — 클라이언트 미제공 시 transcript hash로 fallback (같은 세션 재전송도 안정)
+    sid = req.session_id or ""
+    if not sid and text:
+        import hashlib as _h
+        sid = "tr_" + _h.sha256(text.encode("utf-8", "ignore")).hexdigest()[:16]
     with Session(engine) as session:
         for item in kept:
             try:
@@ -729,6 +735,7 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest, fallback
                     list(item.get("tags") or []),
                     platform=req.platform,
                     captured_by=member_name,
+                    session_id=sid,
                 )
             except Exception:
                 pass
@@ -1035,6 +1042,41 @@ def _build_ontology_cards(mems) -> dict:
         key=lambda g: (-g["count"], g["tag"]),
     )
     return {"total": len(mems), "groups": sorted_groups}
+
+
+@app.get("/member/memory/{memory_id}/siblings")
+def member_memory_siblings(
+    memory_id: str,
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """주어진 메모리와 같은 session_id에서 capture된 sibling 메모리들 반환.
+
+    "이 메모리는 어떤 대화에서 나왔지?" 의 즉답. session_id가 없으면 빈 결과.
+    archived 포함하지 않음 (active만).
+    """
+    target = (
+        session.query(Memory)
+        .filter_by(id=memory_id, team_id=ctx.team.id)
+        .first()
+    )
+    if not target:
+        raise HTTPException(404, "메모리를 찾을 수 없습니다")
+    if not target.session_id:
+        return {"target_id": memory_id, "session_id": "", "siblings": []}
+    siblings = (
+        session.query(Memory)
+        .filter_by(team_id=ctx.team.id, session_id=target.session_id)
+        .filter(Memory.archived_at.is_(None))
+        .filter(Memory.id != memory_id)
+        .order_by(Memory.created_at.asc())
+        .all()
+    )
+    return {
+        "target_id": memory_id,
+        "session_id": target.session_id,
+        "siblings": [memory_store.to_dict(m) for m in siblings],
+    }
 
 
 @app.get("/member/ontology/cards")

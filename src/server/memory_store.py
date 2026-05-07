@@ -150,7 +150,7 @@ def find_similar(
 
 def save(session: Session, team_id: str, mem_type: str, description: str,
          content: str, confidence: float, tags: list[str],
-         platform: str = "", captured_by: str = "") -> Memory:
+         platform: str = "", captured_by: str = "", session_id: str = "") -> Memory:
     """upsert + fuzzy merge.
 
     1) description_hash 정확 일치 → 기존 항목 갱신 (콘텐츠/태그 교체, last_verified 갱신)
@@ -159,7 +159,8 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
        - tags = union
        - content/description은 기존 유지 (canonical)
        - last_verified_at = now, archived_at = None
-    3) 둘 다 미스 → 신규 insert
+       - session_id는 빈 경우만 새 값으로 채움 (기존 attribution 보존)
+    3) 둘 다 미스 → 신규 insert (session_id 포함)
     """
     d_hash = _desc_hash(description)
     now = datetime.now(timezone.utc)
@@ -174,6 +175,8 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
         existing.source_platform = platform
         if captured_by:
             existing.captured_by = captured_by
+        if session_id and not existing.session_id:
+            existing.session_id = session_id
         existing.last_verified_at = now
         existing.archived_at = None
         session.commit()
@@ -190,6 +193,8 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
             similar.archived_at = None
             if captured_by and not similar.captured_by:
                 similar.captured_by = captured_by
+            if session_id and not similar.session_id:
+                similar.session_id = session_id
             session.commit()
             return similar
 
@@ -204,6 +209,7 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
         tags=json.dumps(tags, ensure_ascii=False),
         source_platform=platform,
         captured_by=captured_by,
+        session_id=session_id,
         last_verified_at=now,
     )
     session.add(mem)
@@ -632,6 +638,7 @@ def to_dict(mem: Memory) -> dict:
         "tags": json.loads(mem.tags) if mem.tags else [],
         "platform": mem.source_platform,
         "captured_by": mem.captured_by or "",
+        "session_id": mem.session_id or "",
         "created_at": _iso_utc(mem.created_at),
         "updated_at": _iso_utc(mem.updated_at),
         "last_verified_at": _iso_utc(mem.last_verified_at),

@@ -103,6 +103,7 @@ class Memory(Base):
     tags: Mapped[str] = mapped_column(Text, default="")
     source_platform: Mapped[str] = mapped_column(String(50), default="")
     captured_by: Mapped[str] = mapped_column(String(100), default="")
+    session_id: Mapped[str] = mapped_column(String(80), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -215,6 +216,7 @@ def _migrate_columns():
             ("captured_by", "VARCHAR(100) DEFAULT ''"),
             ("last_verified_at", "DATETIME"),
             ("archived_at", "DATETIME"),
+            ("session_id", "VARCHAR(80) DEFAULT ''"),
         ],
     }
 
