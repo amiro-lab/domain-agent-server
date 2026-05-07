@@ -343,6 +343,30 @@ main { padding: 28px; max-width: 1200px; }
     <!-- 메모리 정리 -->
     <div class="page" id="page-cleanup">
       <div class="panel">
+        <div class="panel-title">태그 정규화 (canonical: 소문자 + 하이픈)</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;">
+          V5 → v5, batch_api → batch-api, Domain:Auth → domain:auth 같은 표기 변종을 통일합니다.
+          PROTECTED 태그(<code style="color:var(--yellow);">v*_fixed</code>)는 그대로 보존.
+          신규 저장은 자동 정규화되므로 이 작업은 옛 누적분 백필용.
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+          <button onclick="normalizeTagsRun(true)" id="btn-norm-preview" style="
+            background:var(--blue);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            미리보기 (dry-run)
+          </button>
+          <button onclick="normalizeTagsRun(false)" id="btn-norm-apply" style="
+            background:var(--purple);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            정규화 실행
+          </button>
+        </div>
+        <div id="norm-summary" style="display:none;font-size:13px;margin-bottom:10px;
+          padding:12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);"></div>
+        <div id="norm-details" style="display:none;font-size:12px;color:var(--text);"></div>
+      </div>
+
+      <div class="panel">
         <div class="panel-title">중복 머지 (Jaccard ≥ threshold)</div>
         <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px;">
           비슷한 description의 메모리 클러스터를 canonical 1개에 합칩니다.
@@ -1011,6 +1035,60 @@ function renderOntologyCards() {
       </div>
     `
   }).join('')
+}
+
+
+// ── 메모리 정리: 태그 normalize ────────────────────────────
+async function normalizeTagsRun(dryRun) {
+  if (!dryRun) {
+    const ok = confirm(
+      `태그 정규화를 실제 실행합니다.\n\n` +
+      `소문자 + 하이픈 표기로 변환되며 PROTECTED 태그(v*_fixed)는 그대로 보존됩니다.\n\n` +
+      `먼저 dry-run으로 미리보기 했나요?`
+    )
+    if (!ok) return
+  }
+  const btnP = document.getElementById('btn-norm-preview')
+  const btnA = document.getElementById('btn-norm-apply')
+  const summary = document.getElementById('norm-summary')
+  const details = document.getElementById('norm-details')
+  btnP.disabled = btnA.disabled = true
+  btnP.style.opacity = btnA.style.opacity = '.6'
+  summary.style.display = 'block'
+  summary.innerHTML = '<span style="color:var(--muted);">실행 중...</span>'
+  details.style.display = 'none'
+
+  try {
+    const res = await API(`/member/memory/normalize-tags?dry_run=${dryRun}`, 'POST')
+    const tone = dryRun ? 'var(--blue)' : 'var(--green)'
+    summary.innerHTML = `
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <strong style="color:${tone};">${dryRun ? '미리보기' : '실행 완료'}</strong>
+        <span>scanned <strong>${res.scanned}</strong></span>
+        <span>changed <strong style="color:var(--yellow);">${res.changed}</strong></span>
+      </div>
+    `
+    if (!res.samples?.length) {
+      details.style.display = 'block'
+      details.innerHTML = `<div style="color:var(--muted);padding:14px;">변경 대상 없음.</div>`
+      return
+    }
+    const rows = res.samples.map(s => `
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                  padding:10px 14px;margin-bottom:8px;font-family:monospace;font-size:11px;">
+        <div style="color:var(--muted);margin-bottom:4px;">${escapeHtml(s.id)}</div>
+        <div><span style="color:var(--red);">−</span> ${escapeHtml(JSON.stringify(s.before))}</div>
+        <div><span style="color:var(--green);">+</span> ${escapeHtml(JSON.stringify(s.after))}</div>
+      </div>
+    `).join('')
+    details.style.display = 'block'
+    details.innerHTML = `<div style="color:var(--muted);font-size:11px;margin-bottom:8px;">샘플 ${res.samples.length}건 (최대 20):</div>` + rows
+  } catch (e) {
+    summary.innerHTML = `<span style="color:var(--red);">에러: ${escapeHtml(String(e.message || e))}</span>`
+  } finally {
+    btnP.disabled = btnA.disabled = false
+    btnP.style.opacity = btnA.style.opacity = '1'
+  }
 }
 
 

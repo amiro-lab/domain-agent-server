@@ -54,6 +54,41 @@ def has_protected_tag(tags: list[str]) -> bool:
     return any(_PROTECTED_TAG_RE.match(t or "") for t in tags)
 
 
+def normalize_tag(tag: str) -> str:
+    """단일 태그를 canonical 형식으로 정규화.
+
+    규칙:
+      - 앞뒤 공백 제거
+      - PROTECTED 태그(v\\d+_fixed)는 그대로 보존 (값 안 건드림)
+      - prefix(콜론 앞)는 소문자
+      - value(콜론 뒤)는 소문자 + `_` → `-` 치환
+      - 빈 문자열 / 공백만은 그대로 반환 (호출자가 필터링)
+    """
+    if tag is None:
+        return ""
+    s = tag.strip()
+    if not s:
+        return s
+    if _PROTECTED_TAG_RE.match(s):
+        return s
+    if ":" in s:
+        prefix, _, value = s.partition(":")
+        prefix = prefix.lower().strip()
+        value = value.strip().lower().replace("_", "-")
+        return f"{prefix}:{value}" if value else prefix
+    return s.lower().replace("_", "-")
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    """태그 리스트 정규화 + 중복 제거 (순서 유지)."""
+    out: list[str] = []
+    for t in tags or []:
+        nt = normalize_tag(t)
+        if nt and nt not in out:
+            out.append(nt)
+    return out
+
+
 def _parse_tags(raw: str) -> list[str]:
     if not raw:
         return []
@@ -121,6 +156,8 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
     """
     d_hash = _desc_hash(description)
     now = datetime.now(timezone.utc)
+    # 입력 단계에서 태그 정규화: V5→v5, batch_api→batch-api, PROTECTED 보존.
+    tags = normalize_tags(tags)
 
     existing = session.query(Memory).filter_by(team_id=team_id, description_hash=d_hash).first()
     if existing:
@@ -200,6 +237,44 @@ def delete(session: Session, team_id: str, memory_id: str) -> bool:
     session.delete(mem)
     session.commit()
     return True
+
+
+def normalize_existing_tags(session: Session, team_id: str, *, dry_run: bool = True) -> dict:
+    """팀의 active 메모리에서 정규화가 필요한 태그를 일괄 갱신.
+
+    save() 시점 정규화는 신규/갱신만 잡으므로, 옛날에 저장된 태그(V5, batch_api 등)는
+    이 함수로 백필. PROTECTED 태그(v*_fixed)는 normalize_tag()가 보존.
+
+    반환:
+      {dry_run, team_id, scanned, changed, samples: [{id, before, after}, ...]}
+    """
+    mems = (
+        session.query(Memory)
+        .filter_by(team_id=team_id)
+        .filter(Memory.archived_at.is_(None))
+        .all()
+    )
+    changed = 0
+    samples: list[dict] = []
+    for m in mems:
+        before = _parse_tags(m.tags)
+        after = normalize_tags(before)
+        if before == after:
+            continue
+        changed += 1
+        if len(samples) < 20:
+            samples.append({"id": m.id, "before": before, "after": after})
+        if not dry_run:
+            m.tags = json.dumps(after, ensure_ascii=False)
+    if not dry_run:
+        session.commit()
+    return {
+        "dry_run": dry_run,
+        "team_id": team_id,
+        "scanned": len(mems),
+        "changed": changed,
+        "samples": samples,
+    }
 
 
 def to_dict(mem: Memory) -> dict:

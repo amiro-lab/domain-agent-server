@@ -878,6 +878,21 @@ def member_memory_retag_untagged(
     return retagger.retag_untagged(session, ctx.team.id, dry_run=dry_run, limit=limit)
 
 
+@app.post("/member/memory/normalize-tags")
+def member_memory_normalize_tags(
+    dry_run: bool = Query(default=True),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """팀 메모리의 태그 표기를 canonical(소문자+하이픈)로 일괄 정규화.
+
+    예: V5 → v5, batch_api → batch-api, Domain:Auth → domain:auth.
+    PROTECTED 태그(v*_fixed)는 그대로 보존.
+    save() 신규 호출은 자동 정규화되므로 이 엔드포인트는 옛 누적분 백필용.
+    """
+    return memory_store.normalize_existing_tags(session, ctx.team.id, dry_run=dry_run)
+
+
 @app.post("/member/memory/dup-scan")
 def member_memory_dup_scan(
     dry_run: bool = Query(default=True),
