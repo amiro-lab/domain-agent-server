@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from server import analyzer, compressor, janitor, memory_store, reporter, retagger
+
+log = logging.getLogger("server.main")
 from server.auth import (
     admin_setup_done, create_admin_token, create_member_token, generate_key,
     get_admin, get_api_key, get_member_ctx, get_team, hash_key, hash_password, verify_password,
@@ -709,8 +712,15 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest, fallback
     with Session(engine) as _s:
         ctx["tag_summary"] = _collect_tag_top_n(_s, team_id, n=30)
     items = analyzer.analyze(text, platform=req.platform, ctx=ctx)
+    # 입구 게이트: confidence/desc-len/content-len/type 검사로 노이즈 차단
+    kept, reject_reasons = memory_store.filter_capture_items(items)
+    if reject_reasons:
+        log.info(
+            f"[capture] team={team_id} extracted={len(items)} kept={len(kept)} "
+            f"rejected={dict(reject_reasons)}"
+        )
     with Session(engine) as session:
-        for item in items:
+        for item in kept:
             try:
                 memory_store.save(
                     session, team_id,

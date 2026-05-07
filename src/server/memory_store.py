@@ -15,6 +15,13 @@ from server.db import Memory
 FUZZY_MERGE_THRESHOLD = 0.6
 CONFIDENCE_CAP = 0.95
 
+# capture 게이트 — LLM이 뽑은 항목이 메모리에 들어갈 자격이 있는지 결정.
+# 노이즈 폭증을 막기 위한 입구 통제. 값은 하드코딩 — 너무 자주 바뀌면 의미 없음.
+CAPTURE_MIN_CONFIDENCE = 0.60
+CAPTURE_MIN_DESC_LEN = 15
+CAPTURE_MIN_CONTENT_LEN = 30
+_VALID_TYPES = ("fact", "preference", "ontology")
+
 # 자동 머지 제외 — 버전 식별자(v3_fixed, v4_fixed, …)는 의미 보존이 우선.
 _PROTECTED_TAG_RE = re.compile(r"^v\d+_fixed$")
 _TOKEN_RE = re.compile(r"[\w가-힣]+", re.UNICODE)
@@ -237,6 +244,52 @@ def delete(session: Session, team_id: str, memory_id: str) -> bool:
     session.delete(mem)
     session.commit()
     return True
+
+
+def should_capture(item: dict) -> tuple[bool, str]:
+    """LLM 추출 항목이 메모리 저장 자격이 있는지 검사.
+
+    반환: (accept: bool, reason: str). reason은 reject 사유 또는 'ok'.
+    호출자는 reject 시 reason을 카운터/로그에 누적해 capture 품질 모니터링.
+    """
+    mem_type = item.get("type")
+    if mem_type not in _VALID_TYPES:
+        return False, f"invalid_type:{mem_type}"
+
+    description = (item.get("description") or "").strip()
+    if len(description) < CAPTURE_MIN_DESC_LEN:
+        return False, f"desc_too_short:{len(description)}"
+
+    content = (item.get("content") or "").strip()
+    if len(content) < CAPTURE_MIN_CONTENT_LEN:
+        return False, f"content_too_short:{len(content)}"
+
+    try:
+        confidence = float(item.get("confidence", 0.7))
+    except (TypeError, ValueError):
+        return False, "invalid_confidence"
+    if confidence < CAPTURE_MIN_CONFIDENCE:
+        return False, f"low_confidence:{confidence:.2f}"
+
+    # description이 알파/한글 1글자도 없으면 노이즈 (숫자·기호만)
+    toks = _tokens(description)
+    if not toks or not any(any(not c.isdigit() for c in t) for t in toks):
+        return False, "no_meaningful_tokens"
+
+    return True, "ok"
+
+
+def filter_capture_items(items: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    """should_capture로 일괄 필터링. (kept_items, reject_reason_counts) 반환."""
+    kept: list[dict] = []
+    reasons: dict[str, int] = {}
+    for it in items or []:
+        ok, reason = should_capture(it)
+        if ok:
+            kept.append(it)
+        else:
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return kept, reasons
 
 
 def normalize_existing_tags(session: Session, team_id: str, *, dry_run: bool = True) -> dict:
