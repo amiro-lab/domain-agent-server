@@ -186,6 +186,7 @@ main { padding: 28px; max-width: 1200px; }
     <div class="tab" onclick="goto('team', this)">팀 현황</div>
     <div class="tab" onclick="goto('knowledge', this)">팀 지식 검색</div>
     <div class="tab" onclick="goto('reports', this)">리포트</div>
+    <div class="tab" onclick="goto('cleanup', this)">메모리 정리</div>
     <div class="tab" onclick="goto('graph', this)">온톨로지 그래프</div>
   </div>
 
@@ -335,6 +336,39 @@ main { padding: 28px; max-width: 1200px; }
         </div>
         <div class="panel-title" style="margin-top:8px;">팀 리포트 기록</div>
         <div id="reports-list" class="loading">로딩 중...</div>
+      </div>
+    </div>
+
+    <!-- 메모리 정리 -->
+    <div class="page" id="page-cleanup">
+      <div class="panel">
+        <div class="panel-title">중복 머지 (Jaccard ≥ threshold)</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px;">
+          비슷한 description의 메모리 클러스터를 canonical 1개에 합칩니다.
+          confidence는 max, tags는 union으로 결합하고 나머지는 archive 됩니다 (90일 후 영구 삭제).
+          PROTECTED 태그(<code style="color:var(--yellow);">v*_fixed</code>)는 자동 제외.
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);">
+            Threshold
+            <input id="dup-threshold" type="number" min="0.30" max="0.95" step="0.05" value="0.60"
+              style="width:80px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;
+                     padding:5px 8px;color:var(--text);font-size:12px;">
+          </label>
+          <button onclick="dupScanRun(true)" id="btn-dup-preview" style="
+            background:var(--blue);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            미리보기 (dry-run)
+          </button>
+          <button onclick="dupScanRun(false)" id="btn-dup-apply" style="
+            background:var(--red);color:#fff;border:none;border-radius:6px;
+            padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">
+            실제 머지 실행
+          </button>
+        </div>
+        <div id="dup-summary" style="display:none;font-size:13px;margin-bottom:14px;
+          padding:12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);"></div>
+        <div id="dup-details" style="display:none;font-size:12px;color:var(--text);"></div>
       </div>
     </div>
 
@@ -883,6 +917,81 @@ function copyWeekly() {
     setTimeout(() => btn.textContent = '📋 클립보드 복사', 2000)
   })
 }
+
+// ── 메모리 정리: dup-scan ─────────────────────────────────
+async function dupScanRun(dryRun) {
+  const thInput = document.getElementById('dup-threshold')
+  const threshold = Math.max(0.30, Math.min(0.95, parseFloat(thInput.value) || 0.6))
+  if (!dryRun) {
+    const ok = confirm(
+      `실제로 머지를 실행합니다.\n\n` +
+      `threshold=${threshold} 기준으로 클러스터된 항목 중 canonical만 남기고\n` +
+      `나머지는 archive 처리됩니다 (90일 후 영구 삭제).\n\n` +
+      `먼저 dry-run으로 미리보기 했나요?`
+    )
+    if (!ok) return
+  }
+
+  const btnPreview = document.getElementById('btn-dup-preview')
+  const btnApply = document.getElementById('btn-dup-apply')
+  const summary = document.getElementById('dup-summary')
+  const details = document.getElementById('dup-details')
+  btnPreview.disabled = btnApply.disabled = true
+  btnPreview.style.opacity = btnApply.style.opacity = '.6'
+  summary.style.display = 'block'
+  summary.innerHTML = '<span style="color:var(--muted);">실행 중...</span>'
+  details.style.display = 'none'
+
+  try {
+    const res = await API(
+      `/member/memory/dup-scan?dry_run=${dryRun}&threshold=${threshold}`,
+      'POST',
+    )
+    const tone = dryRun ? 'var(--blue)' : 'var(--green)'
+    const label = dryRun ? '미리보기 결과' : '실행 완료'
+    summary.innerHTML = `
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <strong style="color:${tone};">${label}</strong>
+        <span>active <strong>${res.active}</strong></span>
+        <span>cluster <strong>${res.clusters}</strong></span>
+        <span>merge 대상 <strong style="color:var(--yellow);">${res.merged}</strong></span>
+        <span style="color:var(--muted);">threshold=${res.threshold}</span>
+      </div>
+    `
+    if (!res.details || !res.details.length) {
+      details.style.display = 'block'
+      details.innerHTML = `<div style="color:var(--muted);padding:14px;">머지 대상 없음.</div>`
+      return
+    }
+    const items = res.details.map(d => `
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+                  padding:12px 14px;margin-bottom:10px;">
+        <div style="margin-bottom:6px;">
+          <span style="color:var(--green);font-weight:600;">canonical</span>
+          <span style="color:var(--muted);font-size:11px;margin-left:6px;">${escapeHtml(d.canonical_id)}</span>
+          <span style="float:right;color:var(--muted);font-size:11px;">conf → ${d.new_confidence?.toFixed?.(2) ?? d.new_confidence}</span>
+        </div>
+        <div style="margin-bottom:8px;">${escapeHtml(d.canonical_description)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">머지될 ${d.merged_descriptions.length}건:</div>
+        <ul style="list-style:none;padding-left:8px;">
+          ${d.merged_descriptions.map(md => `
+            <li style="font-size:12px;color:var(--text);padding:2px 0;">
+              <span style="color:var(--red);">−</span> ${escapeHtml(md)}
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `).join('')
+    details.style.display = 'block'
+    details.innerHTML = items
+  } catch (e) {
+    summary.innerHTML = `<span style="color:var(--red);">에러: ${escapeHtml(String(e.message || e))}</span>`
+  } finally {
+    btnPreview.disabled = btnApply.disabled = false
+    btnPreview.style.opacity = btnApply.style.opacity = '1'
+  }
+}
+
 
 // ── 팀 지식 검색 ─────────────────────────────────────────
 let _knAllTags = [], _activeTag = ''
