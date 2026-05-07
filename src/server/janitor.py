@@ -264,6 +264,83 @@ def dup_scan():
         )
 
 
+def dup_scan_for_team(
+    session: Session,
+    team_id: str,
+    *,
+    dry_run: bool = True,
+    threshold: float | None = None,
+) -> dict:
+    """수동 트리거 — 한 팀의 active 메모리에 dup_scan 실행.
+
+    cron용 dup_scan과 차이:
+      - 단일 team_id로 스코프 제한
+      - 5% cap 가드 안 둠 (사용자 명시 의도이므로 backlog 청소 가능)
+      - 결과 dict 반환 (로그뿐 아니라 호출자에 상세 사유)
+      - dry_run은 호출자 인자 (전역 DRY_RUN과 무관)
+
+    PROTECTED 태그(v*_fixed)는 여기서도 자동 머지 제외.
+    """
+    from server.memory_store import FUZZY_MERGE_THRESHOLD, _parse_tags, _union_tags
+
+    th = threshold if threshold is not None else FUZZY_MERGE_THRESHOLD
+    now = datetime.now(timezone.utc)
+    active = (
+        session.query(Memory)
+        .filter_by(team_id=team_id)
+        .filter(Memory.archived_at.is_(None))
+        .all()
+    )
+    total = len(active)
+    clusters = _dup_clusters(active, th)
+
+    merged = 0
+    details: list[dict] = []
+    for group in clusters:
+        canonical = _pick_canonical(group)
+        others = [m for m in group if m.id != canonical.id]
+
+        new_conf = canonical.confidence
+        new_tags = _parse_tags(canonical.tags)
+        for m in others:
+            new_conf = max(new_conf, m.confidence)
+            new_tags = _union_tags(new_tags, _parse_tags(m.tags))
+        new_conf = min(0.95, new_conf)
+
+        if not dry_run:
+            canonical.confidence = new_conf
+            canonical.tags = json.dumps(new_tags, ensure_ascii=False)
+            canonical.last_verified_at = now
+            for m in others:
+                m.archived_at = now
+
+        merged += len(others)
+        details.append({
+            "canonical_id": canonical.id,
+            "canonical_description": canonical.description,
+            "new_confidence": new_conf,
+            "merged_ids": [m.id for m in others],
+            "merged_descriptions": [m.description for m in others],
+        })
+
+    if not dry_run:
+        session.commit()
+
+    log.info(
+        f"[dup_scan_for_team] team={team_id} dry_run={dry_run} threshold={th} "
+        f"active={total} clusters={len(clusters)} merged={merged}"
+    )
+    return {
+        "dry_run": dry_run,
+        "team_id": team_id,
+        "threshold": th,
+        "active": total,
+        "clusters": len(clusters),
+        "merged": merged,
+        "details": details,
+    }
+
+
 def tag_skew_alert():
     """단일 태그 비중 > 20% 시 알림."""
     with Session(engine) as session:

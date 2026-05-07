@@ -366,6 +366,104 @@ def test_save_fuzzy_caps_confidence(session):
     assert active[0].confidence <= 0.95
 
 
+# ── dup_scan_for_team: 수동 트리거 ──────────────────────────
+
+def test_dup_scan_for_team_dry_run_returns_clusters_no_mutation(session, make_memory):
+    from server import janitor
+
+    a = make_memory(description="alpha beta gamma delta", confidence=0.7)
+    b = make_memory(description="alpha beta gamma delta extra", confidence=0.85)
+    result = janitor.dup_scan_for_team(session, "team-test", dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["clusters"] == 1
+    assert result["merged"] == 1
+    assert len(result["details"]) == 1
+    # 미변경 검증
+    session.refresh(a)
+    session.refresh(b)
+    assert a.archived_at is None
+    assert b.archived_at is None
+
+
+def test_dup_scan_for_team_apply_archives_non_canonical(session, make_memory):
+    from server import janitor
+
+    a = make_memory(
+        description="alpha beta gamma delta", confidence=0.7, tags='["t1"]',
+    )
+    b = make_memory(
+        description="alpha beta gamma delta extra", confidence=0.85, tags='["t2"]',
+    )
+    result = janitor.dup_scan_for_team(session, "team-test", dry_run=False)
+
+    assert result["merged"] == 1
+    session.refresh(a)
+    session.refresh(b)
+    # b가 conf 더 높아 canonical, a는 archive
+    assert b.archived_at is None
+    assert a.archived_at is not None
+    canonical_tags = json.loads(b.tags)
+    assert "t1" in canonical_tags and "t2" in canonical_tags
+
+
+def test_dup_scan_for_team_scoped_to_team(session, make_memory):
+    """다른 팀 메모리는 안 건드림."""
+    from server import janitor
+
+    a = make_memory(description="alpha beta gamma delta", team_id="team-test")
+    b = make_memory(description="alpha beta gamma delta extra", team_id="team-test")
+    other = make_memory(description="alpha beta gamma delta", team_id="team-other")
+    janitor.dup_scan_for_team(session, "team-test", dry_run=False)
+
+    session.refresh(other)
+    assert other.archived_at is None  # team-other은 무관
+
+
+def test_dup_scan_for_team_skips_protected_tag(session, make_memory):
+    from server import janitor
+
+    a = make_memory(description="V5 운영 사양", confidence=0.8, tags='["v5_fixed"]')
+    b = make_memory(description="V5 운영 사양 동일", confidence=0.7, tags='["other"]')
+    result = janitor.dup_scan_for_team(session, "team-test", dry_run=False)
+
+    assert result["merged"] == 0
+    session.refresh(a)
+    session.refresh(b)
+    assert a.archived_at is None
+    assert b.archived_at is None
+
+
+def test_dup_scan_for_team_threshold_param(session, make_memory):
+    """threshold 0.95로 올리면 거의 동일한 것만 잡혀 머지 0건."""
+    from server import janitor
+
+    make_memory(description="alpha beta gamma delta", confidence=0.7)
+    make_memory(description="alpha beta gamma delta extra", confidence=0.85)
+    result = janitor.dup_scan_for_team(session, "team-test", dry_run=True, threshold=0.95)
+
+    assert result["clusters"] == 0
+    assert result["merged"] == 0
+
+
+def test_dup_scan_for_team_no_cap_guard(session, make_memory):
+    """수동 트리거는 cap 제한 없음 — backlog 청소 가능."""
+    from server import janitor
+
+    # 8개 중 6개가 같은 클러스터(75% 머지) — cron이면 cap으로 차단됐을 비율
+    for i in range(6):
+        make_memory(description=f"공유 토큰 alpha beta gamma 변형 {i}", confidence=0.7 + i * 0.01)
+    make_memory(description="완전히 별개 zebra ostrich")
+    make_memory(description="또 다른 별개 yak")
+
+    result = janitor.dup_scan_for_team(session, "team-test", dry_run=False)
+    assert result["merged"] >= 5  # 6개 중 5개는 archive
+
+    from server.db import Memory
+    archived = session.query(Memory).filter(Memory.archived_at.isnot(None)).count()
+    assert archived >= 5
+
+
 # ── tag_skew_alert ────────────────────────────────────────
 
 def test_tag_skew_alert_no_data_does_not_fail(session):

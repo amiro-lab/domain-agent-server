@@ -878,6 +878,24 @@ def member_memory_retag_untagged(
     return retagger.retag_untagged(session, ctx.team.id, dry_run=dry_run, limit=limit)
 
 
+@app.post("/member/memory/dup-scan")
+def member_memory_dup_scan(
+    dry_run: bool = Query(default=True),
+    threshold: float = Query(default=0.6, ge=0.3, le=0.95),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """팀 메모리의 description Jaccard 중복을 수동 머지. dry_run 기본 = 미리보기.
+
+    각 클러스터에서 canonical 1개에 confidence=max + tags=union으로 bump,
+    나머지는 soft archive (90일 후 hard_delete가 영구 삭제).
+    PROTECTED 태그(v*_fixed)는 자동 머지 제외.
+    """
+    return janitor.dup_scan_for_team(
+        session, ctx.team.id, dry_run=dry_run, threshold=threshold
+    )
+
+
 @app.get("/member/ontology/graph")
 def member_ontology_graph(
     min_shared: int = Query(default=1, ge=1, le=10),
