@@ -105,6 +105,8 @@ class Memory(Base):
     captured_by: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     team: Mapped[Team] = relationship("Team", back_populates="memories")
 
@@ -211,6 +213,8 @@ def _migrate_columns():
         ],
         "memories": [
             ("captured_by", "VARCHAR(100) DEFAULT ''"),
+            ("last_verified_at", "DATETIME"),
+            ("archived_at", "DATETIME"),
         ],
     }
 
