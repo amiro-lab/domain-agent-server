@@ -146,8 +146,9 @@ def rebuild_domain_summaries(
     """팀의 도메인 태그 상위 top_n개에 대해 LLM이 한 줄 설명 생성·캐시.
 
     각 도메인의 대표 메모리(_representative_sort_key 우선)들을 보고 '이 도메인은 X' 형태로 1문장 작성.
+    archived 메모리는 합성 입력에서 제외 (사라질 운명의 메모리가 도메인 정의에 들어가면 안 됨).
     """
-    memories = _all_memories(session, team_id)
+    memories = [m for m in _all_memories(session, team_id) if m.archived_at is None]
     groups = _group_by_tag(memories)
 
     targets = sorted(
@@ -215,6 +216,23 @@ def rebuild_domain_summaries(
     session.commit()
 
     return {"updated": updated, "skipped": len(targets) - updated, "total_targets": len(targets)}
+
+
+def rebuild_all_team_summaries(top_n: int = 30, min_count: int = 2) -> None:
+    """모든 활성 팀에 대해 도메인 요약 자동 재생성. weekly cron용.
+
+    min_count=2: 메모리 1개뿐인 도메인은 합성 의미 없고 LLM 비용만 듦.
+    """
+    import logging
+    log = logging.getLogger("janitor")  # janitor 로그에 함께 누적
+    with Session(engine) as session:
+        teams = session.query(Team).all()
+        for team in teams:
+            try:
+                result = rebuild_domain_summaries(session, team.id, top_n=top_n, min_count=min_count)
+                log.info(f"[domain_summary] team={team.id} {result}")
+            except Exception as e:
+                log.error(f"[domain_summary] team={team.id} ERROR: {e}")
 
 
 # ── 데일리 리포트 ─────────────────────────────────────────
