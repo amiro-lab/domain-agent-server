@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from server import analyzer, compressor, janitor, memory_store, reporter, retagger
+from server import analyzer, chunker, compressor, janitor, memory_store, reporter, retagger
 
 log = logging.getLogger("server.main")
 from server.auth import (
@@ -712,33 +712,42 @@ def _process_capture(team_id: str, team_name: str, req: CaptureRequest, fallback
     # 신규 태그 생성 억제: 기존 태그 top-30 빈도순을 ctx에 담아 analyzer 프롬프트에 주입
     with Session(engine) as _s:
         ctx["tag_summary"] = _collect_tag_top_n(_s, team_id, n=30)
-    items = analyzer.analyze(text, platform=req.platform, ctx=ctx)
-    # 입구 게이트: confidence/desc-len/content-len/type 검사로 노이즈 차단
-    kept, reject_reasons = memory_store.filter_capture_items(items)
-    if reject_reasons:
-        log.info(
-            f"[capture] team={team_id} extracted={len(items)} kept={len(kept)} "
-            f"rejected={dict(reject_reasons)}"
-        )
-    # session_id 자동 도출 — 클라이언트 미제공 시 transcript hash로 fallback (같은 세션 재전송도 안정)
-    sid = req.session_id or ""
-    if not sid and text:
+    # session_id 기본값 — 클라이언트 미제공 시 transcript hash로 fallback
+    base_sid = req.session_id or ""
+    if not base_sid and text:
         import hashlib as _h
-        sid = "tr_" + _h.sha256(text.encode("utf-8", "ignore")).hexdigest()[:16]
+        base_sid = "tr_" + _h.sha256(text.encode("utf-8", "ignore")).hexdigest()[:16]
+
+    # 토픽 경계 chunker — 긴 transcript를 의미 단위로 분할
+    chunks = chunker.split_by_topic(text, ctx=ctx)
+    log.info(
+        f"[capture] team={team_id} chunks={len(chunks)} "
+        f"labels={[c['label'] for c in chunks]}"
+    )
+
     with Session(engine) as session:
-        for item in kept:
-            try:
-                memory_store.save(
-                    session, team_id,
-                    item["type"], item["description"], item["content"],
-                    float(item.get("confidence", 0.7)),
-                    list(item.get("tags") or []),
-                    platform=req.platform,
-                    captured_by=member_name,
-                    session_id=sid,
+        for ci, chunk in enumerate(chunks):
+            chunk_sid = base_sid if len(chunks) == 1 else f"{base_sid}_w{ci:02d}"
+            items = analyzer.analyze(chunk["text"], platform=req.platform, ctx=ctx)
+            kept, reject_reasons = memory_store.filter_capture_items(items)
+            if reject_reasons:
+                log.info(
+                    f"[capture] team={team_id} chunk={ci} label={chunk['label']!r} "
+                    f"extracted={len(items)} kept={len(kept)} rejected={dict(reject_reasons)}"
                 )
-            except Exception:
-                pass
+            for item in kept:
+                try:
+                    memory_store.save(
+                        session, team_id,
+                        item["type"], item["description"], item["content"],
+                        float(item.get("confidence", 0.7)),
+                        list(item.get("tags") or []),
+                        platform=req.platform,
+                        captured_by=member_name,
+                        session_id=chunk_sid,
+                    )
+                except Exception:
+                    pass
 
 
 @app.post("/api/capture")
