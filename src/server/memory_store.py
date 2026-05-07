@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from server.db import Memory
+
+# fuzzy merge 임계: description 토큰 Jaccard ≥ 이 값이면 같은 항목으로 본다.
+FUZZY_MERGE_THRESHOLD = 0.6
+CONFIDENCE_CAP = 0.95
+
+# 자동 머지 제외 — 버전 식별자(v3_fixed, v4_fixed, …)는 의미 보존이 우선.
+_PROTECTED_TAG_RE = re.compile(r"^v\d+_fixed$")
+_TOKEN_RE = re.compile(r"[\w가-힣]+", re.UNICODE)
 
 
 def _iso_utc(dt: datetime | None) -> str:
@@ -31,10 +40,88 @@ def _make_id(mem_type: str, description: str) -> str:
     return f"{mem_type}_{today}_{slug}_{h}"
 
 
+def _tokens(text: str) -> set[str]:
+    return {t.lower() for t in _TOKEN_RE.findall(text or "") if len(t) >= 2}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def has_protected_tag(tags: list[str]) -> bool:
+    return any(_PROTECTED_TAG_RE.match(t or "") for t in tags)
+
+
+def _parse_tags(raw: str) -> list[str]:
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return v if isinstance(v, list) else []
+
+
+def _union_tags(*tag_lists: list[str]) -> list[str]:
+    out: list[str] = []
+    for tl in tag_lists:
+        for t in tl or []:
+            if t and t not in out:
+                out.append(t)
+    return out
+
+
+def find_similar(
+    session: Session,
+    team_id: str,
+    mem_type: str,
+    description: str,
+    *,
+    threshold: float = FUZZY_MERGE_THRESHOLD,
+) -> Memory | None:
+    """동일 team_id + mem_type + active 안에서 description Jaccard ≥ threshold 항목 반환.
+
+    PROTECTED 태그(v*_fixed)가 있는 후보는 의미 보존을 위해 제외 (버전 식별자라 머지 불가).
+    """
+    desc_tokens = _tokens(description)
+    if not desc_tokens:
+        return None
+    candidates = (
+        session.query(Memory)
+        .filter_by(team_id=team_id, mem_type=mem_type)
+        .filter(Memory.archived_at.is_(None))
+        .all()
+    )
+    best: Memory | None = None
+    best_score = 0.0
+    for m in candidates:
+        if has_protected_tag(_parse_tags(m.tags)):
+            continue
+        score = _jaccard(desc_tokens, _tokens(m.description))
+        if score > best_score:
+            best = m
+            best_score = score
+    return best if best_score >= threshold else None
+
+
 def save(session: Session, team_id: str, mem_type: str, description: str,
          content: str, confidence: float, tags: list[str],
          platform: str = "", captured_by: str = "") -> Memory:
+    """upsert + fuzzy merge.
+
+    1) description_hash 정확 일치 → 기존 항목 갱신 (콘텐츠/태그 교체, last_verified 갱신)
+    2) (1) 없을 때: 들어온 항목에 protected tag 없으면 Jaccard로 유사 항목 탐색 → bump
+       - confidence = min(0.95, max(기존, 신규))
+       - tags = union
+       - content/description은 기존 유지 (canonical)
+       - last_verified_at = now, archived_at = None
+    3) 둘 다 미스 → 신규 insert
+    """
     d_hash = _desc_hash(description)
+    now = datetime.now(timezone.utc)
+
     existing = session.query(Memory).filter_by(team_id=team_id, description_hash=d_hash).first()
     if existing:
         existing.content = content
@@ -43,8 +130,24 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
         existing.source_platform = platform
         if captured_by:
             existing.captured_by = captured_by
+        existing.last_verified_at = now
+        existing.archived_at = None
         session.commit()
         return existing
+
+    if not has_protected_tag(tags):
+        similar = find_similar(session, team_id, mem_type, description)
+        if similar is not None:
+            similar.confidence = min(CONFIDENCE_CAP, max(similar.confidence, confidence))
+            similar.tags = json.dumps(
+                _union_tags(_parse_tags(similar.tags), tags), ensure_ascii=False
+            )
+            similar.last_verified_at = now
+            similar.archived_at = None
+            if captured_by and not similar.captured_by:
+                similar.captured_by = captured_by
+            session.commit()
+            return similar
 
     mem = Memory(
         id=_make_id(mem_type, description),
@@ -57,6 +160,7 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
         tags=json.dumps(tags, ensure_ascii=False),
         source_platform=platform,
         captured_by=captured_by,
+        last_verified_at=now,
     )
     session.add(mem)
     session.commit()
@@ -64,7 +168,10 @@ def save(session: Session, team_id: str, mem_type: str, description: str,
 
 
 def query(session: Session, team_id: str, q: str, limit: int = 10) -> list[Memory]:
-    all_mems = session.query(Memory).filter_by(team_id=team_id).all()
+    all_mems = (session.query(Memory)
+                .filter_by(team_id=team_id)
+                .filter(Memory.archived_at.is_(None))
+                .all())
     if not q:
         return all_mems[:limit]
     q_lower = q.lower()
@@ -77,7 +184,7 @@ def query(session: Session, team_id: str, q: str, limit: int = 10) -> list[Memor
 
 def list_all(session: Session, team_id: str, mem_type: str | None = None,
              tags: list[str] | None = None) -> list[Memory]:
-    q = session.query(Memory).filter_by(team_id=team_id)
+    q = session.query(Memory).filter_by(team_id=team_id).filter(Memory.archived_at.is_(None))
     if mem_type:
         q = q.filter_by(mem_type=mem_type)
     mems = q.all()
@@ -107,4 +214,6 @@ def to_dict(mem: Memory) -> dict:
         "captured_by": mem.captured_by or "",
         "created_at": _iso_utc(mem.created_at),
         "updated_at": _iso_utc(mem.updated_at),
+        "last_verified_at": _iso_utc(mem.last_verified_at),
+        "archived_at": _iso_utc(mem.archived_at),
     }

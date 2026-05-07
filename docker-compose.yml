@@ -10,6 +10,9 @@ services:
     environment:
       - DATABASE_URL=sqlite:////data/domain_agent.db
       - TZ=Asia/Seoul
+      - JANITOR_ENABLED=true
+      - JANITOR_DRY_RUN=true
+      - JANITOR_CAP_RATIO=0.05
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

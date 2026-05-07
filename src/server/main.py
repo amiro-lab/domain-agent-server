@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from server import analyzer, compressor, memory_store, reporter
+from server import analyzer, compressor, janitor, memory_store, reporter
 from server.auth import (
     admin_setup_done, create_admin_token, create_member_token, generate_key,
     get_admin, get_api_key, get_member_ctx, get_team, hash_key, hash_password, verify_password,
@@ -55,6 +55,7 @@ def startup():
     create_tables()
     _load_provider_settings()
     _reload_schedules()
+    janitor.register(scheduler)
     scheduler.start()
 
 
