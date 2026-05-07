@@ -172,8 +172,10 @@ class DomainSummary(Base):
     team_id: Mapped[str] = mapped_column(String(36), nullable=False)
     tag: Mapped[str] = mapped_column(String(200), nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="")
+    narrative: Mapped[str] = mapped_column(Text, default="")
     memory_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    narrative_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AuditLog(Base):
@@ -217,6 +219,10 @@ def _migrate_columns():
             ("last_verified_at", "DATETIME"),
             ("archived_at", "DATETIME"),
             ("session_id", "VARCHAR(80) DEFAULT ''"),
+        ],
+        "domain_summaries": [
+            ("narrative", "TEXT DEFAULT ''"),
+            ("narrative_updated_at", "DATETIME"),
         ],
     }
 

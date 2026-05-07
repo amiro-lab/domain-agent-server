@@ -232,7 +232,12 @@ main { padding: 28px; max-width: 1200px; }
               <button id="btn-rebuild-summaries" onclick="rebuildDomainSummaries()" style="
                 background:var(--purple);color:#fff;border:none;border-radius:6px;
                 padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">
-                도메인 설명 갱신
+                한 줄 요약 갱신
+              </button>
+              <button id="btn-rebuild-narratives" onclick="rebuildDomainNarratives()" style="
+                background:var(--blue);color:#fff;border:none;border-radius:6px;
+                padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">
+                Narrative 갱신
               </button>
             </div>
           </div>
@@ -301,14 +306,17 @@ main { padding: 28px; max-width: 1200px; }
           </div>
         </div>
 
-        <!-- 검색 -->
-        <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <!-- 검색 + 태그 dropdown -->
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
           <input id="kn-search" placeholder="키워드 검색..." oninput="searchKnowledge()"
             style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:6px;
             color:var(--text);padding:8px 12px;font-size:13px;">
+          <select id="kn-tag-select" onchange="filterKnTag(this.value)"
+            style="min-width:200px;max-width:280px;background:var(--surface);border:1px solid var(--border);
+            border-radius:6px;color:var(--text);padding:8px 10px;font-size:12px;cursor:pointer;">
+            <option value="">전체 태그</option>
+          </select>
         </div>
-        <!-- 태그 필터 -->
-        <div id="kn-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <!-- 결과 -->
         <div id="kn-count" style="font-size:12px;color:var(--muted);margin-bottom:8px;"></div>
         <div id="kn-results" class="loading">로딩 중...</div>
@@ -662,6 +670,53 @@ async function rebuildDomainSummaries() {
   }
 }
 
+async function rebuildDomainNarratives() {
+  const btn = document.getElementById('btn-rebuild-narratives')
+  if (!btn) return
+  const ok = confirm(
+    `도메인 narrative를 LLM(Haiku)으로 생성합니다.\n\n` +
+    `대상: 메모리 5개 이상인 상위 8개 도메인.\n` +
+    `각 도메인당 1번 LLM 호출 (도메인당 ~$0.005, 8개 합쳐 $0.04 내외).\n\n` +
+    `진행할까요?`,
+  )
+  if (!ok) return
+  const orig = btn.textContent
+  btn.disabled = true
+  btn.textContent = '생성 중… (1~2분)'
+  try {
+    const r = await API('/member/domain/narratives/rebuild?top_n=8&min_count=5', 'POST')
+    btn.textContent = `${r.updated}개 갱신`
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false }, 2000)
+    await loadMyDomain()
+  } catch (e) {
+    btn.textContent = '실패: ' + String(e.message || e).slice(0, 30)
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false }, 3000)
+  }
+}
+
+function showNarrativeModal(tag, narrative, updatedAt) {
+  const overlay = document.createElement('div')
+  overlay.className = 'mem-modal-overlay'
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove() }
+  const formatted = (narrative || '(narrative 없음)')
+    .split('\n')
+    .map(line => line.replace(/^## /, '<h3 style="font-size:14px;font-weight:700;color:var(--blue);margin:14px 0 6px;">') + (line.startsWith('## ') ? '</h3>' : ''))
+    .join('\n')
+  overlay.innerHTML = `
+    <div class="mem-modal" onclick="event.stopPropagation()">
+      <div class="mem-modal-head">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:14px;font-weight:600;">📖 ${_memEsc(tag)}</span>
+          <span style="font-size:11px;color:var(--muted);">${updatedAt ? '갱신: ' + _memEsc(updatedAt.slice(0,16).replace('T',' ')) : ''}</span>
+        </div>
+        <button class="mem-modal-close" onclick="this.closest('.mem-modal-overlay').remove()">닫기 ✕</button>
+      </div>
+      <div class="mem-modal-body" style="white-space:normal;">${formatted}</div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+}
+
 // ── 온톨로지 그래프 ──────────────────────────────────────
 let _graphNet = null
 let _graphData = { nodes: [], edges: [] }
@@ -841,7 +896,13 @@ async function loadMyDomain() {
               onmouseover="this.style.color='var(--red)'"
               onmouseout="this.style.color='var(--muted)'">✕</button>
           </div>
-          ${oneLine ? `<div style="font-size:12px;color:var(--text);opacity:.85;padding-left:0;line-height:1.45;">↳ ${indicator}${escapeHtml(oneLine)}</div>` : ''}
+          ${oneLine ? `<div style="font-size:12px;color:var(--text);opacity:.85;padding-left:0;line-height:1.45;display:flex;align-items:flex-start;gap:6px;">
+            <span style="flex:1;">↳ ${indicator}${escapeHtml(oneLine)}</span>
+            ${cached?.narrative ? `<button onclick="showNarrativeModal('${tag.replace(/'/g, "\\'")}', ${JSON.stringify(cached.narrative)}, '${cached.narrative_updated_at||''}')"
+              title="도메인 narrative (배경/결정의 흐름/현재/미해결)"
+              style="background:var(--bg3);border:1px solid var(--border);color:var(--blue);
+                     border-radius:4px;padding:1px 8px;font-size:10px;cursor:pointer;flex-shrink:0;">📖 narrative</button>` : ''}
+          </div>` : ''}
         </div>`
       }).join('')
   }
@@ -1494,23 +1555,23 @@ let _knAllTags = [], _activeTag = ''
 async function loadKnowledge() {
   const res = await API('/member/team-knowledge?limit=50').catch(() => ({ memories: [], all_tags: [] }))
   _knAllTags = res.all_tags || []
-  renderKnTags(_knAllTags)
+  renderKnTagDropdown(_knAllTags)
   renderKnResults(res.memories)
 }
 
-function renderKnTags(tags) {
-  const el = document.getElementById('kn-tags')
-  el.innerHTML = ['전체', ...tags].map(t => `
-    <span onclick="filterKnTag('${t}')" style="
-      cursor:pointer;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;
-      background:${_activeTag===t||(!_activeTag&&t==='전체') ? 'var(--blue)' : 'var(--surface2)'};
-      color:${_activeTag===t||(!_activeTag&&t==='전체') ? '#fff' : 'var(--muted)'};
-      border:1px solid var(--border);">${t}</span>
-  `).join('')
+function renderKnTagDropdown(tags) {
+  const sel = document.getElementById('kn-tag-select')
+  if (!sel) return
+  // 정렬 + 중복 제거. 'source:' 메타 태그는 dropdown에서 빼서 의미있는 것만 노출
+  const meaningful = [...new Set(tags.filter(t => t && !t.startsWith('source:')))]
+    .sort((a, b) => a.localeCompare(b, 'ko'))
+  const current = _activeTag
+  sel.innerHTML = `<option value="">전체 태그 (${meaningful.length})</option>` +
+    meaningful.map(t => `<option value="${_memEsc(t)}"${t===current ? ' selected' : ''}>${_memEsc(t)}</option>`).join('')
 }
 
 function filterKnTag(tag) {
-  _activeTag = tag === '전체' ? '' : tag
+  _activeTag = tag || ''
   searchKnowledge()
 }
 
@@ -1520,7 +1581,11 @@ async function searchKnowledge() {
   if (q) params.set('q', q)
   if (_activeTag) params.set('tag', _activeTag)
   const res = await API(`/member/team-knowledge?${params}`).catch(() => ({ memories: [], all_tags: _knAllTags }))
-  renderKnTags(res.all_tags || _knAllTags)
+  // 태그 풀이 응답에서 갱신될 수 있음 — 누적해서 유지
+  if (res.all_tags && res.all_tags.length) {
+    _knAllTags = res.all_tags
+    renderKnTagDropdown(_knAllTags)
+  }
   renderKnResults(res.memories)
 }
 

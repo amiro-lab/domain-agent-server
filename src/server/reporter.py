@@ -128,13 +128,17 @@ def domain_summary(session: Session, team_id: str) -> dict:
 # ── 도메인 한 줄 설명 (LLM 캐시) ──────────────────────────
 
 def get_cached_domain_summaries(session: Session, team_id: str) -> dict[str, dict]:
-    """팀의 캐시된 도메인 한 줄 설명. {tag: {summary, memory_count, updated_at}}."""
+    """팀의 캐시된 도메인 한 줄 설명. {tag: {summary, narrative, memory_count, updated_at, ...}}."""
     rows = session.query(DomainSummary).filter_by(team_id=team_id).all()
     return {
         r.tag: {
             "summary": r.summary,
+            "narrative": r.narrative or "",
             "memory_count": r.memory_count,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "narrative_updated_at": (
+                r.narrative_updated_at.isoformat() if r.narrative_updated_at else None
+            ),
         }
         for r in rows
     }
@@ -215,6 +219,99 @@ def rebuild_domain_summaries(
         updated += 1
     session.commit()
 
+    return {"updated": updated, "skipped": len(targets) - updated, "total_targets": len(targets)}
+
+
+def rebuild_domain_narratives(
+    session: Session, team_id: str, top_n: int = 8, min_count: int = 5,
+) -> dict:
+    """도메인별 multi-paragraph narrative 생성·캐시.
+
+    한 줄 요약(rebuild_domain_summaries)을 보완. 시간순으로 정렬한 대표 메모리 ~20개를
+    LLM에 주고 4개 섹션 narrative 생성:
+      ## 배경 / ## 결정의 흐름 / ## 현재 / ## 미해결
+
+    top_n 기본 8 (비용 큼 — 한 줄 요약 30개와 별도 운영). min_count 기본 5
+    (메모리 적은 도메인은 narrative 합성해도 빈약).
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    memories = [m for m in _all_memories(session, team_id) if m.archived_at is None]
+    groups = _group_by_tag(memories)
+    targets = sorted(
+        [(tag, mems) for tag, mems in groups.items() if len(mems) >= min_count],
+        key=lambda x: -len(x[1]),
+    )[:top_n]
+    if not targets:
+        return {"updated": 0, "skipped": 0, "total_targets": 0}
+
+    team = session.query(Team).filter_by(id=team_id).first()
+    ctx = {"team_id": team_id, "team_name": team.name if team else ""}
+    now = _dt.now(_tz.utc)
+    epoch_min = _dt.min.replace(tzinfo=_tz.utc)
+
+    updated = 0
+    for tag, mems in targets:
+        # 시간순(asc) — 진화 흐름 파악용
+        time_sorted = sorted(mems, key=lambda m: m.created_at or epoch_min)
+        # 대표 ~20개: 시간 양 끝 + 신뢰도 높은 것 mix.
+        # 단순화: 시간 sample + representative_sort_key 상위 합쳐서 dedup, 20개 cap.
+        repr_pool = sorted(mems, key=_representative_sort_key)[:30]
+        seen, picked = set(), []
+        for m in time_sorted + repr_pool:
+            if m.id in seen:
+                continue
+            seen.add(m.id)
+            picked.append(m)
+            if len(picked) >= 20:
+                break
+        # 시간순으로 다시 정렬해서 narrative에 일관된 순서 제공
+        picked.sort(key=lambda m: m.created_at or epoch_min)
+
+        block_lines = []
+        for m in picked:
+            d = (m.created_at or epoch_min).date().isoformat()
+            content_excerpt = (m.content or "").replace("\n", " ")[:300]
+            block_lines.append(f"- [{m.mem_type}] ({d}) {m.description}\n    {content_excerpt}")
+        block = "\n".join(block_lines)
+
+        prompt = (
+            f"다음은 '{tag}' 도메인의 메모리 {len(picked)}개 (시간순 오래된 → 최근).\n"
+            "이 도메인이 어떻게 진화했는지 아래 4개 섹션 narrative로 작성하라:\n\n"
+            "## 배경\n"
+            "이 도메인이 왜 시작됐는가 — 풀려는 문제·전제·제약. 1~2문단.\n\n"
+            "## 결정의 흐름\n"
+            "어떤 시도가 있었고 무엇이 채택·폐기됐는지 시간순으로 1~3문단. "
+            "메모리들 사이의 인과 관계가 보이면 명시 (예: 'X 발견 → Y 시도 → Z 안착').\n\n"
+            "## 현재\n"
+            "지금의 합의된 상태·접근. 1~2문단.\n\n"
+            "## 미해결\n"
+            "아직 풀리지 않은 과제·관찰된 부작용·미상 사항. 1문단. "
+            "정보 부족하면 '미상' 한 줄로.\n\n"
+            "규칙:\n"
+            "- 한국어로 작성. 전문 용어·코드·고유명사·수치는 영어/원문 인용 OK\n"
+            "- 단순 메모리 인용 금지 — 종합적 narrative\n"
+            "- 메모리에 없는 정보 추측 금지\n"
+            "- 마크다운 헤더 형식 정확히 (## 배경, ## 결정의 흐름, ## 현재, ## 미해결)\n\n"
+            f"메모리:\n{block}"
+        )
+        narrative = _llm_summarize(prompt, "domain_narrative", ctx)
+        if not narrative or narrative.startswith("(리포트 생성 실패"):
+            continue
+        row = session.query(DomainSummary).filter_by(team_id=team_id, tag=tag).first()
+        if row:
+            row.narrative = narrative
+            row.narrative_updated_at = now
+            row.memory_count = len(mems)
+        else:
+            row = DomainSummary(
+                team_id=team_id, tag=tag, summary="",
+                narrative=narrative, memory_count=len(mems),
+                narrative_updated_at=now,
+            )
+            session.add(row)
+        updated += 1
+
+    session.commit()
     return {"updated": updated, "skipped": len(targets) - updated, "total_targets": len(targets)}
 
 

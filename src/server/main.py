@@ -884,6 +884,23 @@ def member_domain_summaries_rebuild(
     return result
 
 
+@app.post("/member/domain/narratives/rebuild")
+def member_domain_narratives_rebuild(
+    top_n: int = Query(default=8, ge=1, le=30),
+    min_count: int = Query(default=5, ge=2, le=50),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """도메인별 multi-paragraph narrative 생성·캐시 (배경/결정의 흐름/현재/미해결).
+
+    한 줄 요약(/summaries/rebuild)과 별개. Haiku 호출 비용 큼 — top_n 보수적 기본.
+    """
+    result = reporter.rebuild_domain_narratives(
+        session, ctx.team.id, top_n=top_n, min_count=min_count,
+    )
+    return result
+
+
 @app.post("/member/memory/retag-untagged")
 def member_memory_retag_untagged(
     dry_run: bool = Query(default=True),
