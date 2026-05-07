@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from server import analyzer, compressor, janitor, memory_store, reporter
+from server import analyzer, compressor, janitor, memory_store, reporter, retagger
 from server.auth import (
     admin_setup_done, create_admin_token, create_member_token, generate_key,
     get_admin, get_api_key, get_member_ctx, get_team, hash_key, hash_password, verify_password,
@@ -865,6 +865,17 @@ def member_domain_summaries_rebuild(
     """LLM이 도메인 태그별 한 줄 설명을 생성·캐시."""
     result = reporter.rebuild_domain_summaries(session, ctx.team.id, top_n=top_n, min_count=min_count)
     return result
+
+
+@app.post("/member/memory/retag-untagged")
+def member_memory_retag_untagged(
+    dry_run: bool = Query(default=True),
+    limit: int = Query(default=20, ge=1, le=2000),
+    ctx: MemberContext = Depends(get_member_ctx),
+    session: Session = Depends(get_session),
+):
+    """untagged 메모리(namespace 태그 없음)에 LLM이 분류 태그 백필. dry_run 기본."""
+    return retagger.retag_untagged(session, ctx.team.id, dry_run=dry_run, limit=limit)
 
 
 @app.get("/member/ontology/graph")
